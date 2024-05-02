@@ -123,6 +123,14 @@ protected:
 		uint64_t odropped = 0;
 	};
 
+	struct HandleBundle
+	{
+		KernelInterfaceHandle forward;
+		KernelInterfaceHandle in_dump;
+		KernelInterfaceHandle out_dump;
+		KernelInterfaceHandle drop_dump;
+	};
+
 	cDataPlane* dataPlane;
 
 	fragmentation_t fragmentation;
