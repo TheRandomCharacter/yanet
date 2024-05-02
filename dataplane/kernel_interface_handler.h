@@ -1,11 +1,11 @@
 #pragma once
 #include <vector>
 
+#include <rte_ethdev.h>
+
 #include "base.h"
 #include "metadata.h"
 
-#include "burst.h"
-#include "kernel_interface_handle.h"
 
 namespace dataplane
 {
@@ -24,7 +24,8 @@ class KernelInterface
 {
 	tPortId m_port;
 	tQueueId m_queue;
-	dpdk::Burst m_burst;
+	rte_mbuf* m_burst[CONFIG_YADECAP_MBUFS_BURST_SIZE];
+	uint16_t m_burst_length;
 
 public:
 	KernelInterface() = default;
@@ -34,7 +35,13 @@ public:
 	}
 	void Flush()
 	{
-		m_burst.Tx(m_port, m_queue).Free();
+		auto sent = rte_eth_tx_burst(m_port, m_queue, m_burst, m_burst_length);
+		const auto remain = m_burst_length - sent;
+		if (remain)
+		{
+			rte_pktmbuf_free_bulk(m_burst + sent, remain);
+		}
+		m_burst_length = 0;
 	}
 	struct DirectionStats
 	{
@@ -44,12 +51,23 @@ public:
 	};
 	DirectionStats FlushTracked()
 	{
-		const auto& [bytes, packets] = m_burst.TxTracked(m_port, m_queue);
-		return DirectionStats{bytes, packets, Free()};
-	}
-	uint16_t Free()
-	{
-		return m_burst.Free();
+		DirectionStats stats;
+		stats.bytes = std::accumulate(m_burst, m_burst + m_burst_length, 0, [](uint64_t total, rte_mbuf* mbuf) {
+			return total + rte_pktmbuf_pkt_len(mbuf);
+		});
+		stats.packets = rte_eth_tx_burst(m_port, m_queue, m_burst, m_burst_length);
+
+		stats.dropped = m_burst_length - stats.packets;
+		if (stats.dropped)
+		{
+			stats.bytes = std::accumulate(m_burst, m_burst + m_burst_length, stats.bytes, [](uint64_t total, rte_mbuf* mbuf) {
+				return total - rte_pktmbuf_pkt_len(mbuf);
+			});
+			rte_pktmbuf_free_bulk(m_burst + stats.packets, stats.dropped);
+		}
+		m_burst_length = 0;
+
+		return stats;
 	}
 	const tPortId& Port() const
 	{
@@ -57,11 +75,11 @@ public:
 	}
 	void Push(rte_mbuf* mbuf)
 	{
-		if (!m_burst.Push(mbuf))
+		if (m_burst_length == YANET_CONFIG_BURST_SIZE)
 		{
 			Flush();
-			m_burst.PushUnsafe(mbuf);
 		}
+		m_burst[m_burst_length++] = mbuf;
 	}
 	const tQueueId& Queue() const
 	{
@@ -71,24 +89,19 @@ public:
 
 class KernelInterfaceWorker
 {
-	struct HandleBundle
-	{
-		KernelInterfaceHandle forward;
-		KernelInterfaceHandle in_dump;
-		KernelInterfaceHandle out_dump;
-		KernelInterfaceHandle drop_dump;
-	};
-	std::size_t m_port_count;
-	std::vector<HandleBundle> m_handles;
+	std::size_t m_port_count = 0;
 	std::array<sKniStats, CONFIG_YADECAP_PORTS_SIZE> m_stats;
+	std::array<tPortId, CONFIG_YADECAP_PORTS_SIZE> m_forward_port_ids;
 	std::array<KernelInterface, CONFIG_YADECAP_PORTS_SIZE> m_forward;
 	std::array<KernelInterface, CONFIG_YADECAP_PORTS_SIZE> m_in_dump;
 	std::array<KernelInterface, CONFIG_YADECAP_PORTS_SIZE> m_out_dump;
 	std::array<KernelInterface, CONFIG_YADECAP_PORTS_SIZE> m_drop_dump;
-	dpdk::Burst m_operative;
 	const dataplane::base::PortMapper* m_port_mapper;
 	uint64_t m_unknown_dump_interface = 0;
 	KernelInterfaceWorker() {}
+	bool AddInterface(std::array<std::pair<tPortId,tQueueId>, 4> psnqs)
+	{
+	}
 	static std::optional<KernelInterfaceHandle> InitInterface(KernelInterface& iface,
 	                                                          const std::string& name,
 	                                                          tPortId port,
@@ -109,14 +122,16 @@ class KernelInterfaceWorker
 	 */
 	void RecvFree(const KernelInterface& iface)
 	{
-		m_operative.Rx(iface.Port(), iface.Queue()).Free();
+		rte_mbuf* burst[CONFIG_YADECAP_MBUFS_BURST_SIZE];
+		auto len = rte_eth_rx_burst(iface.Port(), iface.Queue(), burst, CONFIG_YADECAP_MBUFS_BURST_SIZE);
+		rte_pktmbuf_free_bulk(burst, len);
 	}
 
 public:
 	KernelInterfaceWorker(const KernelInterfaceWorker&) = delete;
-	KernelInterfaceWorker(KernelInterfaceWorker&&) = default;
+	KernelInterfaceWorker(KernelInterfaceWorker&&);
 	KernelInterfaceWorker& operator=(const KernelInterfaceWorker&) = delete;
-	KernelInterfaceWorker& operator=(KernelInterfaceWorker&&) = default;
+	KernelInterfaceWorker& operator=(KernelInterfaceWorker&&);
 	~KernelInterfaceWorker() = default;
 	static std::optional<KernelInterfaceWorker> MakeKernelInterfaceWorker(
 	        const std::vector<std::pair<tPortId, const std::string&>>& ports,
@@ -186,12 +201,26 @@ public:
 	{
 		for (int i = 0; i < m_port_count; ++i)
 		{
+			rte_mbuf* burst[CONFIG_YADECAP_MBUFS_BURST_SIZE];
+			auto packets = rte_eth_rx_burst(m_forward_port_ids[i], 0, burst, CONFIG_YADECAP_MBUFS_BURST_SIZE);
+			uint64_t bytes = std::accumulate(burst, burst + packets, 0, [](uint64_t total, rte_mbuf* mbuf) {
+				return total + rte_pktmbuf_pkt_len(mbuf);
+			});
+			auto transmitted = rte_eth_tx_burst(m_port_mapper->ToDpdk(i), 0, burst, packets);
+			const auto remain = packets - transmitted;
+
+			if (remain)
+			{
+				bytes = std::accumulate(burst, burst + packets, bytes, [](uint64_t total, rte_mbuf* mbuf) {
+					return total - rte_pktmbuf_pkt_len(mbuf);
+				});
+				rte_pktmbuf_free_bulk(burst + transmitted, remain);
+			}
+
 			auto& stats = m_stats[i];
-			const auto& [packets, bytes] = m_operative.Rx(m_handles[i].forward.Id(), 0)
-			                                       .TxTracked(m_port_mapper->ToDpdk(i), 0);
-			stats.opackets += packets;
+			stats.opackets += transmitted;
 			stats.obytes += bytes;
-			stats.odropped += m_operative.Free();
+			stats.odropped += remain;
 		}
 	}
 	void HandlePacketDump(rte_mbuf* mbuf)
