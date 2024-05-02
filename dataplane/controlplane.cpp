@@ -1390,34 +1390,16 @@ eResult cControlPlane::initMempool()
 eResult cControlPlane::init_kernel_interfaces()
 {
 	const auto& portmapper = slowWorker->basePermanently.ports;
+	const uint16_t queue_size = dataPlane->getConfigValues().kernel_interface_queue_size;
 	for (tPortId i = 0; i < portmapper.size(); ++i)
 	{
 		const auto port_id = portmapper.ToDpdk(i);
 		const auto& interface_name = std::get<0>(dataPlane->ports.at(port_id));
 
-		auto forward = dataplane::KernelInterfaceHandle::MakeKernelInterfaceHandle(
-		        interface_name,
-		        port_id,
-		        mempool,
-		        dataPlane->getConfigValues().kernel_interface_queue_size);
-
-		auto in = dataplane::KernelInterfaceHandle::MakeKernelInterfaceHandle(
-		        interface_name,
-		        port_id,
-		        mempool,
-		        dataPlane->getConfigValues().kernel_interface_queue_size);
-
-		auto out = dataplane::KernelInterfaceHandle::MakeKernelInterfaceHandle(
-		        interface_name,
-		        port_id,
-		        mempool,
-		        dataPlane->getConfigValues().kernel_interface_queue_size);
-
-		auto drop = dataplane::KernelInterfaceHandle::MakeKernelInterfaceHandle(
-		        interface_name,
-		        port_id,
-		        mempool,
-		        dataPlane->getConfigValues().kernel_interface_queue_size);
+		auto forward = dataplane::KernelInterfaceHandle::MakeKernelInterfaceHandle(interface_name, port_id, queue_size);
+		auto in = dataplane::KernelInterfaceHandle::MakeKernelInterfaceHandle(interface_name, port_id, queue_size);
+		auto out = dataplane::KernelInterfaceHandle::MakeKernelInterfaceHandle(interface_name, port_id, queue_size);
+		auto drop = dataplane::KernelInterfaceHandle::MakeKernelInterfaceHandle(interface_name, port_id, queue_size);
 
 		if (!forward || !in || !out || !drop)
 		{
@@ -1428,6 +1410,49 @@ eResult cControlPlane::init_kernel_interfaces()
 		                                         std::move(in.value()),
 		                                         std::move(out.value()),
 		                                         std::move(drop.value())});
+	}
+
+	return eResult::success;
+}
+
+bool cControlPlane::KNIAddTxQueue(tQueueId queue, tSocketId socket)
+{
+	for (auto& [fwd, in, out, drop] : kni_handles)
+	{
+		if (!fwd.SetupTxQueue(queue, socket) ||
+		    !in.SetupTxQueue(queue, socket) ||
+		    !out.SetupTxQueue(queue, socket) ||
+		    !drop.SetupTxQueue(queue, socket))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+bool cControlPlane::KNIAddRxQueue(tQueueId queue, tSocketId socket, rte_mempool* mempool)
+{
+	for (auto& [fwd, in, out, drop] : kni_handles)
+	{
+		if (!fwd.SetupRxQueue(queue, socket, mempool) ||
+		    !in.SetupRxQueue(queue, socket, mempool) ||
+		    !out.SetupRxQueue(queue, socket, mempool) ||
+		    !drop.SetupRxQueue(queue, socket, mempool))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+eResult cControlPlane::setup_kernel_interfaces_queues()
+{
+	if (!KNIAddTxQueue(0, rte_lcore_to_socket_id(dataPlane->config.controlPlaneCoreId)))
+	{
+		return eResult::errorInitQueue;
+	}
+	if (!KNIAddRxQueue(0, rte_lcore_to_socket_id(dataPlane->config.controlPlaneCoreId), mempool))
+	{
+		return eResult::errorInitQueue;
 	}
 
 	return eResult::success;
