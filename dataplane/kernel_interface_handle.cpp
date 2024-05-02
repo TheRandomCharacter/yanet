@@ -122,12 +122,12 @@ bool KernelInterfaceHandle::CloneMTU(const uint16_t port_id) const
 	return true;
 }
 
-bool KernelInterfaceHandle::SetupQueues(rte_mempool* mempool, uint64_t kernel_interface_queue_size)
+bool KernelInterfaceHandle::SetupRxQueue(tQueueId queue, tSocketId socket, rte_mempool* mempool)
 {
 	int rc = rte_eth_rx_queue_setup(m_kni_port,
-	                                0,
-	                                kernel_interface_queue_size,
-	                                0, ///< @todo: socket
+	                                queue,
+	                                m_queue_size,
+	                                socket,
 	                                nullptr,
 	                                mempool);
 	if (rc < 0)
@@ -136,16 +136,22 @@ bool KernelInterfaceHandle::SetupQueues(rte_mempool* mempool, uint64_t kernel_in
 		return false;
 	}
 
-	rc = rte_eth_tx_queue_setup(m_kni_port,
-	                            0,
-	                            kernel_interface_queue_size,
-	                            0, ///< @todo: socket
-	                            nullptr);
+	return true;
+}
+bool KernelInterfaceHandle::SetupTxQueue(tQueueId queue, tSocketId socket)
+{
+	int rc = rte_eth_tx_queue_setup(m_kni_port,
+	                                queue,
+	                                m_queue_size,
+	                                socket,
+	                                nullptr);
 	if (rc < 0)
 	{
 		YADECAP_LOG_ERROR("rte_eth_tx_queue_setup(%u, %u) = %d\n", m_kni_port, 0, rc);
 		return false;
 	}
+
 	return true;
 }
+
 } // namespace dataplane

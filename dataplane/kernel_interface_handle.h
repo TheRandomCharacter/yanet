@@ -12,6 +12,7 @@ class KernelInterfaceHandle
 {
 	tPortId m_kni_port = INVALID_PORT_ID;
 	std::string m_vdev_name;
+	uint16_t m_queue_size = 0;
 
 	KernelInterfaceHandle() noexcept = default;
 
@@ -23,19 +24,16 @@ public:
 	MakeKernelInterfaceHandle(
 	        const std::string& name,
 	        tPortId port,
-	        rte_mempool* mempool,
-	        uint64_t queue_size,
-	        bool start = true)
+	        uint16_t queue_size)
 	{
 		KernelInterfaceHandle kni;
+		kni.m_queue_size = queue_size;
 		kni.m_vdev_name = vdevName(name, port);
 		std::string vdev_args = vdevArgs(name, port, queue_size);
 		if (!kni.Add(kni.m_vdev_name, vdev_args) ||
-		    !kni.Configure(DefaultConfig()) ||
-		    !kni.SetupQueues(mempool, queue_size) ||
-		    (start && !kni.Start()))
+		    !kni.Configure(DefaultConfig()))
 		{
-			return std::optional<KernelInterfaceHandle>{};
+			return std::nullopt;
 		}
 
 		return std::optional<KernelInterfaceHandle>{std::move(kni)};
@@ -45,6 +43,8 @@ public:
 	KernelInterfaceHandle& operator=(const KernelInterfaceHandle&) = delete;
 	KernelInterfaceHandle& operator=(KernelInterfaceHandle&& other) noexcept;
 	[[nodiscard]] bool SetUp() const;
+	bool SetupRxQueue(tQueueId queue, tSocketId socket, rte_mempool* mempool);
+	bool SetupTxQueue(tQueueId queue, tSocketId socket);
 
 private:
 	static std::string vdevName(const std::string& name, const tPortId port_id)
@@ -64,7 +64,6 @@ private:
 	}
 	bool Configure(const rte_eth_conf& eth_conf) noexcept;
 	bool CloneMTU(const uint16_t) const;
-	bool SetupQueues(rte_mempool* mempool, uint64_t kernel_interface_queue_size);
 	void MarkInvalid() { m_kni_port = INVALID_PORT_ID; }
 	[[nodiscard]] bool Valid() { return m_kni_port != INVALID_PORT_ID; }
 };
