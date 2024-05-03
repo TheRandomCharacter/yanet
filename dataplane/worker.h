@@ -210,7 +210,7 @@ protected:
 	inline uint32_t get_tcp_state_timeout(uint8_t flags, const dataplane::globalBase::state_timeout_config_t& state_timeout_config);
 	inline uint32_t get_state_timeout(rte_mbuf* mbuf, dataplane::metadata* metadata, const dataplane::globalBase::state_timeout_config_t& state_timeout_config);
 
-protected:
+public:
 	/// @todo: move to slow_worker_t
 	YANET_NEVER_INLINE void slowWorkerBeforeHandlePackets();
 	YANET_NEVER_INLINE void slowWorkerHandlePackets();
