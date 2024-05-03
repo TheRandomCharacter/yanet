@@ -123,14 +123,6 @@ protected:
 		uint64_t odropped = 0;
 	};
 
-	struct HandleBundle
-	{
-		KernelInterfaceHandle forward;
-		KernelInterfaceHandle in_dump;
-		KernelInterfaceHandle out_dump;
-		KernelInterfaceHandle drop_dump;
-	};
-
 	cDataPlane* dataPlane;
 
 	fragmentation_t fragmentation;
@@ -152,7 +144,7 @@ protected:
 		dataplane::KernelInterfaceHandle out_dump;
 		dataplane::KernelInterfaceHandle drop_dump;
 	};
-	std::vector<KniHandleBundle> kni_handles;
+	std::map<tPortId, KniHandleBundle> kni_handles;
 
 	struct KniPortData
 	{
