@@ -1406,10 +1406,10 @@ eResult cControlPlane::init_kernel_interfaces()
 			return eResult::errorAllocatingKernelInterface;
 		}
 
-		kni_handles.emplace_back(KniHandleBundle{std::move(forward.value()),
+		kni_handles[port_id] = KniHandleBundle{std::move(forward.value()),
 		                                         std::move(in.value()),
 		                                         std::move(out.value()),
-		                                         std::move(drop.value())});
+		                                         std::move(drop.value())};
 	}
 
 	return eResult::success;
@@ -1417,8 +1417,9 @@ eResult cControlPlane::init_kernel_interfaces()
 
 bool cControlPlane::KNIAddTxQueue(tQueueId queue, tSocketId socket)
 {
-	for (auto& [fwd, in, out, drop] : kni_handles)
+	for (auto& bundle : kni_handles)
 	{
+		auto& [fwd, in, out, drop] = bundle.second;
 		if (!fwd.SetupTxQueue(queue, socket) ||
 		    !in.SetupTxQueue(queue, socket) ||
 		    !out.SetupTxQueue(queue, socket) ||
@@ -1431,8 +1432,9 @@ bool cControlPlane::KNIAddTxQueue(tQueueId queue, tSocketId socket)
 }
 bool cControlPlane::KNIAddRxQueue(tQueueId queue, tSocketId socket, rte_mempool* mempool)
 {
-	for (auto& [fwd, in, out, drop] : kni_handles)
+	for (auto& bundle : kni_handles)
 	{
+		auto& [fwd, in, out, drop] = bundle.second;
 		if (!fwd.SetupRxQueue(queue, socket, mempool) ||
 		    !in.SetupRxQueue(queue, socket, mempool) ||
 		    !out.SetupRxQueue(queue, socket, mempool) ||
@@ -1462,7 +1464,7 @@ bool cControlPlane::set_kernel_interfaces_up()
 {
 	for (const auto& bundle : kni_handles)
 	{
-		if (!bundle.forward.SetUp())
+		if (!bundle.second.forward.SetUp())
 		{
 			return false;
 		}
