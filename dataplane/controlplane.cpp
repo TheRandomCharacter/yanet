@@ -1406,10 +1406,10 @@ eResult cControlPlane::init_kernel_interfaces()
 			return eResult::errorAllocatingKernelInterface;
 		}
 
-		kni_handles[port_id] = KniHandleBundle{std::move(forward.value()),
+		kni_handles.emplace(port_id, KniHandleBundle{std::move(forward.value()),
 		                                         std::move(in.value()),
 		                                         std::move(out.value()),
-		                                         std::move(drop.value())};
+		                                         std::move(drop.value())});
 	}
 
 	return eResult::success;
