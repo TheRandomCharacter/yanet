@@ -2069,7 +2069,6 @@ struct port
 	}
 
 	uint64_t physicalPort_egress_drops;
-	uint64_t controlPlane_drops; ///< @todo: DELETE
 };
 }
 }
