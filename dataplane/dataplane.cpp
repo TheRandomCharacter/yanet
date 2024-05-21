@@ -455,7 +455,7 @@ eResult cDataPlane::initPorts()
 		tPortId portId;
 		if (strncmp(name.data(), SOCK_DEV_PREFIX, strlen(SOCK_DEV_PREFIX)) == 0)
 		{
-			portId = sock_dev_create(name.data(), 0);
+			portId = sock_dev_create(name.data() + strlen(SOCK_DEV_PREFIX), interfaceName.c_str(), 0);
 		}
 		else if (rte_eth_dev_get_port_by_name(name.data(), &portId))
 		{
@@ -1046,8 +1046,8 @@ eResult cDataPlane::InitSlowWorker(const tCoreId core, const std::vector<tPortId
 	auto slow = new dataplane::SlowWorker(worker,
 	                                      ports_to_service,
 	                                      socket_cplane_mempools.at(socket_id),
-										  InitPortsBarrier(),
-										  RunBarrier());
+	                                      InitPortsBarrier(),
+	                                      RunBarrier());
 	if (!slow)
 	{
 		return eResult::dataplaneIsBroken;
@@ -1063,7 +1063,7 @@ eResult cDataPlane::InitSlowWorkers()
 	for (auto& [core, ifacenames] : config.controlplane_workers)
 	{
 		std::stringstream ss;
-		for (auto& iface: ifacenames)
+		for (auto& iface : ifacenames)
 		{
 			ss << iface << ',';
 		}
