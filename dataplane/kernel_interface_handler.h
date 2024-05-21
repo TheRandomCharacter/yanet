@@ -25,7 +25,7 @@ class KernelInterface
 	tPortId m_port;
 	tQueueId m_queue;
 	rte_mbuf* m_burst[CONFIG_YADECAP_MBUFS_BURST_SIZE];
-	uint16_t m_burst_length;
+	uint16_t m_burst_length = 0;
 
 public:
 	KernelInterface() = default;
@@ -90,8 +90,12 @@ public:
 class KernelInterfaceWorker
 {
 	std::size_t m_port_count = 0;
+	std::array<tPortId, CONFIG_YADECAP_PORTS_SIZE> m_dpdk_ports;
+	std::array<tQueueId, CONFIG_YADECAP_PORTS_SIZE> m_dpdk_queues;
 	std::array<sKniStats, CONFIG_YADECAP_PORTS_SIZE> m_stats;
+#if DEPRECATED
 	std::array<tPortId, CONFIG_YADECAP_PORTS_SIZE> m_forward_port_ids;
+#endif
 	std::array<KernelInterface, CONFIG_YADECAP_PORTS_SIZE> m_forward;
 	std::array<KernelInterface, CONFIG_YADECAP_PORTS_SIZE> m_in_dump;
 	std::array<KernelInterface, CONFIG_YADECAP_PORTS_SIZE> m_out_dump;
@@ -101,7 +105,13 @@ class KernelInterfaceWorker
 	KernelInterfaceWorker() {}
 	bool AddInterface(std::array<std::pair<tPortId,tQueueId>, 4> psnqs)
 	{
+		m_forward[m_port_count] = KernelInterface{psnqs[0].first, psnqs[0].second};
+		m_forward[m_port_count] = KernelInterface{psnqs[1].first, psnqs[1].second};
+		m_forward[m_port_count] = KernelInterface{psnqs[2].first, psnqs[2].second};
+		m_forward[m_port_count] = KernelInterface{psnqs[3].first, psnqs[3].second};
+		m_port_count++;
 	}
+#if DEPRECATED
 	static std::optional<KernelInterfaceHandle> InitInterface(KernelInterface& iface,
 	                                                          const std::string& name,
 	                                                          tPortId port,
@@ -116,6 +126,7 @@ class KernelInterfaceWorker
 		}
 		return h;
 	}
+#endif
 	/**
 	 * @brief Receive packets from interface and free them.
 	 * @param iface Interface to receive packets from.
@@ -133,6 +144,11 @@ public:
 	KernelInterfaceWorker& operator=(const KernelInterfaceWorker&) = delete;
 	KernelInterfaceWorker& operator=(KernelInterfaceWorker&&);
 	~KernelInterfaceWorker() = default;
+	void Iteration()
+	{
+
+	}
+#if DEPRECATED
 	static std::optional<KernelInterfaceWorker> MakeKernelInterfaceWorker(
 	        const std::vector<std::pair<tPortId, const std::string&>>& ports,
 	        tQueueId queue_id,
@@ -160,6 +176,7 @@ public:
 		}
 		return std::optional<KernelInterfaceWorker>{std::move(kniworker)};
 	}
+
 	/// @brief Set kernel interface up via ioctl
 	[[nodiscard]] bool SetInterfacesUp()
 	{
@@ -172,6 +189,8 @@ public:
 		}
 		return true;
 	}
+#endif
+
 	/// @brief Transmit accumulated packets. Those that could not be sent are freed
 	void Flush()
 	{
@@ -202,11 +221,11 @@ public:
 		for (int i = 0; i < m_port_count; ++i)
 		{
 			rte_mbuf* burst[CONFIG_YADECAP_MBUFS_BURST_SIZE];
-			auto packets = rte_eth_rx_burst(m_forward_port_ids[i], 0, burst, CONFIG_YADECAP_MBUFS_BURST_SIZE);
+			auto packets = rte_eth_rx_burst(m_forward[i].Port(), m_forward[i].Queue(), burst, CONFIG_YADECAP_MBUFS_BURST_SIZE);
 			uint64_t bytes = std::accumulate(burst, burst + packets, 0, [](uint64_t total, rte_mbuf* mbuf) {
 				return total + rte_pktmbuf_pkt_len(mbuf);
 			});
-			auto transmitted = rte_eth_tx_burst(m_port_mapper->ToDpdk(i), 0, burst, packets);
+			auto transmitted = rte_eth_tx_burst(m_dpdk_ports[i], m_dpdk_queues[i], burst, packets);
 			const auto remain = packets - transmitted;
 
 			if (remain)
@@ -223,6 +242,7 @@ public:
 			stats.odropped += remain;
 		}
 	}
+#if DEPRECATED
 	void HandlePacketDump(rte_mbuf* mbuf)
 	{
 		dataplane::metadata* metadata = YADECAP_METADATA(mbuf);
@@ -252,5 +272,6 @@ public:
 				rte_pktmbuf_free(mbuf);
 		}
 	}
+#endif
 };
 } // namespace dataplane

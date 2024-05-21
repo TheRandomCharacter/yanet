@@ -265,15 +265,12 @@ common::idp::getOtherStats::response cControlPlane::getOtherStats()
 
 	/// workers
 	{
-		for (const auto& iter : dataPlane->workers)
+		for (const auto& worker : dataPlane->workers_vector)
 		{
-			const tCoreId& coreId = iter.first;
-			const cWorker* worker = iter.second;
-
 			std::array<uint64_t, CONFIG_YADECAP_MBUFS_BURST_SIZE + 1> bursts;
 			memcpy(&bursts[0], worker->bursts, sizeof(worker->bursts));
 
-			response_workers[coreId] = {bursts};
+			response_workers[worker->coreId] = {bursts};
 		}
 	}
 
@@ -286,40 +283,43 @@ common::idp::getWorkerStats::response cControlPlane::getWorkerStats(const common
 
 	common::idp::getWorkerStats::response response;
 
+	auto add_stats_to_response = [this, &response](tCoreId coreId, const cWorker* worker) {
+		std::map<tPortId, common::worker::stats::port> portsStats;
+		for (const auto& portIter : dataPlane->ports)
+		{
+			portsStats[portIter.first] = worker->statsPorts[portIter.first];
+		}
+
+		response[coreId] = {worker->iteration,
+		                    worker->stats,
+		                    portsStats};
+	};
+
 	if (request.size())
 	{
 		for (const auto& coreId : request)
 		{
 			/// @todo: check coreId
 
-			const auto& worker = dataPlane->workers.find(coreId)->second;
-
-			std::map<tPortId, common::worker::stats::port> portsStats;
-			for (const auto& portIter : dataPlane->ports)
+			const auto& workers = dataPlane->workers_vector;
+			auto it = std::find_if(workers.begin(), workers.end(), [&coreId](const cWorker* worker) {
+				return worker->coreId == coreId;
+			});
+			if (it == workers.end())
 			{
-				portsStats[portIter.first] = worker->statsPorts[portIter.first];
+				YANET_LOG_ERROR("Worker stats requested for unused core id (%d)\n", coreId);
+				continue;
 			}
 
-			response[coreId] = {worker->iteration,
-			                    worker->stats,
-			                    portsStats};
+			add_stats_to_response(coreId, *it);
 		}
 	}
 	else
 	{
 		/// all workers
-
-		for (const auto& [coreId, worker] : dataPlane->workers)
+		for (const auto worker : dataPlane->workers_vector)
 		{
-			std::map<tPortId, common::worker::stats::port> portsStats;
-			for (const auto& portIter : dataPlane->ports)
-			{
-				portsStats[portIter.first] = worker->statsPorts[portIter.first];
-			}
-
-			response[coreId] = {worker->iteration,
-			                    worker->stats,
-			                    portsStats};
+			add_stats_to_response(worker->coreId, worker);
 		}
 	}
 
@@ -407,13 +407,14 @@ common::idp::get_ports_stats::response cControlPlane::get_ports_stats()
 			rte_eth_stats_get(portId, &stats);
 		}
 
-		uint64_t physicalPort_egress_drops = 0;
-		for (const auto& [coreId, worker] : dataPlane->workers)
-		{
-			(void)coreId;
-
-			physicalPort_egress_drops += worker->statsPorts[portId].physicalPort_egress_drops;
-		}
+		const auto& workers = dataPlane->workers_vector;
+		uint64_t physicalPort_egress_drops = std::accumulate(
+		        workers.begin(),
+		        workers.end(),
+		        0,
+		        [portId](uint64_t total, cWorker* worker) {
+			        return total += worker->statsPorts[portId].physicalPort_egress_drops;
+		        });
 
 		response[portId] = {stats.ipackets,
 		                    stats.ibytes,
@@ -582,10 +583,8 @@ common::idp::getAclCounters::response cControlPlane::getAclCounters()
 	common::idp::getAclCounters::response response;
 
 	response.resize(YANET_CONFIG_ACL_COUNTERS_SIZE);
-	for (const auto& [coreId, worker] : dataPlane->workers)
+	for (cWorker* worker : dataPlane->workers_vector)
 	{
-		(void)coreId;
-
 		for (size_t i = 0; i < YANET_CONFIG_ACL_COUNTERS_SIZE; i++)
 		{
 			response[i] += worker->aclCounters[i];
@@ -648,14 +647,13 @@ common::idp::getCounters::response cControlPlane::getCounters(const common::idp:
 			continue;
 		}
 
-		uint64_t counter = 0;
-		for (const auto& [core_id, worker] : dataPlane->workers)
-		{
-			(void)core_id;
-			counter += worker->counters[counter_id];
-		}
-
-		response[i] = counter;
+		response[i] = std::accumulate(
+		        dataPlane->workers_vector.begin(),
+		        dataPlane->workers_vector.end(),
+		        0,
+		        [counter_id](uint64_t total, cWorker* worker) {
+			        return total += worker->counters[counter_id];
+		        });
 	}
 
 	return response;
@@ -679,6 +677,7 @@ common::idp::getConfig::response cControlPlane::getConfig() const
 		                           pci};
 	}
 
+	// @todo : what about slow workers
 	for (const auto& workerIter : dataPlane->workers)
 	{
 		const tCoreId& coreId = workerIter.first;
@@ -1118,13 +1117,12 @@ common::idp::get_counter_by_name::response cControlPlane::get_counter_by_name(co
 	}
 
 	// core_id was not specified, return counter for each core_id
-	for (const auto& [core_id, worker] : dataPlane->workers)
+	for (const cWorker* worker : dataPlane->workers_vector)
 	{
-		(void)worker;
-		std::optional<uint64_t> counter_val = dataPlane->getCounterValueByName(counter_name, core_id);
+		std::optional<uint64_t> counter_val = dataPlane->getCounterValueByName(counter_name, worker->coreId);
 		if (counter_val.has_value())
 		{
-			response[core_id] = counter_val.value();
+			response[worker->coreId] = counter_val.value();
 		}
 	}
 
@@ -1247,10 +1245,8 @@ void cControlPlane::switchBase()
 {
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
-	for (auto& iter : dataPlane->workers)
+	for (cWorker* worker : dataPlane->workers_vector)
 	{
-		auto* worker = iter.second;
-
 		worker->currentBaseId ^= 1;
 	}
 
@@ -1267,9 +1263,8 @@ void cControlPlane::switchBase()
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
-	for (auto& iter : dataPlane->workers)
+	for (cWorker* worker : dataPlane->workers_vector)
 	{
-		auto* worker = iter.second;
 		auto& base = worker->bases[worker->currentBaseId];
 		auto& baseNext = worker->bases[worker->currentBaseId ^ 1];
 
@@ -1308,10 +1303,8 @@ void cControlPlane::waitAllWorkers()
 {
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
-	for (const auto& [core_id, worker] : dataPlane->workers)
+	for (cWorker* worker : dataPlane->workers_vector)
 	{
-		(void)core_id;
-
 		uint64_t startIteration = worker->iteration;
 		uint64_t nextIteration = startIteration;
 		while (nextIteration - startIteration <= (uint64_t)16)
@@ -1378,10 +1371,7 @@ eResult cControlPlane::init_kernel_interfaces()
 			return eResult::errorAllocatingKernelInterface;
 		}
 
-		kni_handles.emplace(port_id, KniHandleBundle{std::move(forward.value()),
-		                                         std::move(in.value()),
-		                                         std::move(out.value()),
-		                                         std::move(drop.value())});
+		kni_handles.emplace(port_id, KniHandleBundle{std::move(forward.value()), std::move(in.value()), std::move(out.value()), std::move(drop.value())});
 	}
 
 	return eResult::success;
@@ -1483,188 +1473,191 @@ void cControlPlane::flush_kernel_interface(KniPortData& port_data)
 	port_data.mbufs_count = 0;
 }
 
-void cControlPlane::mainThread()
+void cControlPlane::Iteration()
 {
 	rte_mbuf* operational[CONFIG_YADECAP_MBUFS_BURST_SIZE];
 
-	for (;;)
+	if (dataPlane->config.SWNormalPriorityRateLimitPerWorker || dataPlane->config.SWICMPOutRateLimit)
 	{
-		if (dataPlane->config.SWNormalPriorityRateLimitPerWorker || dataPlane->config.SWICMPOutRateLimit)
+		SWRateLimiterTimeTracker();
+	}
+
+	slowWorker->slowWorkerBeforeHandlePackets();
+
+	/// dequeue packets from worker's rings
+	for (unsigned nIter = 0; nIter < YANET_CONFIG_RING_PRIORITY_RATIO; nIter++)
+	{
+		for (unsigned hIter = 0; hIter < YANET_CONFIG_RING_PRIORITY_RATIO; hIter++)
 		{
-			SWRateLimiterTimeTracker();
-		}
-
-		slowWorker->slowWorkerBeforeHandlePackets();
-
-		/// dequeue packets from worker's rings
-		for (unsigned nIter = 0; nIter < YANET_CONFIG_RING_PRIORITY_RATIO; nIter++)
-		{
-			for (unsigned hIter = 0; hIter < YANET_CONFIG_RING_PRIORITY_RATIO; hIter++)
-			{
-				unsigned hProcessed = 0;
-				for (const auto& iter : dataPlane->workers)
-				{
-					cWorker* worker = iter.second;
-					hProcessed += ring_handle(worker->ring_toFreePackets, worker->ring_highPriority);
-				}
-				if (!hProcessed)
-				{
-					break;
-				}
-			}
-
-			unsigned nProcessed = 0;
+			unsigned hProcessed = 0;
 			for (const auto& iter : dataPlane->workers)
 			{
 				cWorker* worker = iter.second;
-				nProcessed += ring_handle(worker->ring_toFreePackets, worker->ring_normalPriority);
+				hProcessed += ring_handle(worker->ring_toFreePackets, worker->ring_highPriority);
 			}
-			if (!nProcessed)
+			if (!hProcessed)
 			{
 				break;
 			}
 		}
+
+		unsigned nProcessed = 0;
 		for (const auto& iter : dataPlane->workers)
 		{
 			cWorker* worker = iter.second;
-			ring_handle(worker->ring_toFreePackets, worker->ring_lowPriority);
+			nProcessed += ring_handle(worker->ring_toFreePackets, worker->ring_normalPriority);
 		}
-
-		if (use_kernel_interface)
+		if (!nProcessed)
 		{
-			for (int i = 0; i < slowWorker->basePermanently.ports.size(); ++i)
+			break;
+		}
+	}
+	for (const auto& iter : dataPlane->workers)
+	{
+		cWorker* worker = iter.second;
+		ring_handle(worker->ring_toFreePackets, worker->ring_lowPriority);
+	}
+
+	if (use_kernel_interface)
+	{
+		for (int i = 0; i < slowWorker->basePermanently.ports.size(); ++i)
+		{
+			flush_kernel_interface(kernel_interfaces[i], kernel_stats[i]);
+			flush_kernel_interface(in_dump_kernel_interfaces[i]);
+			flush_kernel_interface(out_dump_kernel_interfaces[i]);
+			flush_kernel_interface(drop_dump_kernel_interfaces[i]);
+		}
+	}
+
+	/// dequeue packets from worker_gc's ring to slowworker
+	for (const auto& [core_id, worker_gc] : dataPlane->worker_gcs)
+	{
+		(void)core_id;
+
+		rte_mbuf* mbufs[CONFIG_YADECAP_MBUFS_BURST_SIZE];
+
+		unsigned rxSize = rte_ring_sc_dequeue_burst(worker_gc->ring_to_slowworker,
+		                                            (void**)mbufs,
+		                                            CONFIG_YADECAP_MBUFS_BURST_SIZE,
+		                                            nullptr);
+
+		for (uint16_t mbuf_i = 0; mbuf_i < rxSize; mbuf_i++)
+		{
+			rte_mbuf* mbuf = convertMempool(worker_gc->ring_to_free_mbuf, mbufs[mbuf_i]);
+			if (!mbuf)
 			{
-				flush_kernel_interface(kernel_interfaces[i], kernel_stats[i]);
-				flush_kernel_interface(in_dump_kernel_interfaces[i]);
-				flush_kernel_interface(out_dump_kernel_interfaces[i]);
-				flush_kernel_interface(drop_dump_kernel_interfaces[i]);
+				continue;
 			}
+
+			dataplane::metadata* metadata = YADECAP_METADATA(mbuf);
+
+			sendPacketToSlowWorker(mbuf, metadata->flow);
 		}
+	}
 
-		/// dequeue packets from worker_gc's ring to slowworker
-		for (const auto& [core_id, worker_gc] : dataPlane->worker_gcs)
+	fragmentation.handle();
+	dregress.handle();
+
+	if (use_kernel_interface)
+	{
+		/// recv packets from kernel interface and send to physical port
+		for (int i = 0; i < slowWorker->basePermanently.ports.size(); ++i)
 		{
-			(void)core_id;
+			auto kernel_port_id = kernel_interfaces[i].kernel_port_id;
 
-			rte_mbuf* mbufs[CONFIG_YADECAP_MBUFS_BURST_SIZE];
-
-			unsigned rxSize = rte_ring_sc_dequeue_burst(worker_gc->ring_to_slowworker,
-			                                            (void**)mbufs,
-			                                            CONFIG_YADECAP_MBUFS_BURST_SIZE,
-			                                            nullptr);
-
-			for (uint16_t mbuf_i = 0; mbuf_i < rxSize; mbuf_i++)
+			unsigned rxSize = rte_eth_rx_burst(kernel_port_id,
+			                                   0,
+			                                   operational,
+			                                   CONFIG_YADECAP_MBUFS_BURST_SIZE);
+			uint64_t bytes = 0;
+			for (uint16_t i = 0; i < rxSize; ++i)
 			{
-				rte_mbuf* mbuf = convertMempool(worker_gc->ring_to_free_mbuf, mbufs[mbuf_i]);
-				if (!mbuf)
-				{
-					continue;
-				}
-
-				dataplane::metadata* metadata = YADECAP_METADATA(mbuf);
-
-				sendPacketToSlowWorker(mbuf, metadata->flow);
+				bytes += rte_pktmbuf_pkt_len(operational[i]);
 			}
+			uint16_t txSize = rte_eth_tx_burst(slowWorker->basePermanently.ports.ToDpdk(i),
+			                                   0,
+			                                   operational,
+			                                   rxSize);
+			for (auto i = rxSize; i < txSize; ++i)
+			{
+				bytes -= rte_pktmbuf_pkt_len(operational[i]);
+			}
+			auto to_drop = rxSize - txSize;
+			rte_pktmbuf_free_bulk(operational + txSize, to_drop);
+			sKniStats& stats = kernel_stats[i];
+			stats.odropped += to_drop;
+			stats.opackets += txSize;
+			stats.obytes += bytes;
 		}
 
-		fragmentation.handle();
-		dregress.handle();
-
-		if (use_kernel_interface)
+		/// recv from in.X/out.X/drop.X interfaces and free packets
+		for (int i = 0; i < slowWorker->basePermanently.ports.size(); ++i)
 		{
-			/// recv packets from kernel interface and send to physical port
-			for (int i = 0; i < slowWorker->basePermanently.ports.size(); ++i)
+			for (auto& iface : in_dump_kernel_interfaces)
 			{
-				auto kernel_port_id = kernel_interfaces[i].kernel_port_id;
 
-				unsigned rxSize = rte_eth_rx_burst(kernel_port_id,
+				unsigned rxSize = rte_eth_rx_burst(iface.kernel_port_id,
 				                                   0,
 				                                   operational,
 				                                   CONFIG_YADECAP_MBUFS_BURST_SIZE);
-				uint64_t bytes = 0;
-				for (uint16_t i = 0; i < rxSize; ++i)
-				{
-					bytes += rte_pktmbuf_pkt_len(operational[i]);
-				}
-				uint16_t txSize = rte_eth_tx_burst(slowWorker->basePermanently.ports.ToDpdk(i),
+				rte_pktmbuf_free_bulk(operational, rxSize);
+			}
+			for (auto& iface : out_dump_kernel_interfaces)
+			{
+
+				unsigned rxSize = rte_eth_rx_burst(iface.kernel_port_id,
 				                                   0,
 				                                   operational,
-				                                   rxSize);
-				for (auto i = rxSize; i < txSize; ++i)
-				{
-					bytes -= rte_pktmbuf_pkt_len(operational[i]);
-				}
-				auto to_drop = rxSize - txSize;
-				rte_pktmbuf_free_bulk(operational + txSize, to_drop);
-				sKniStats& stats = kernel_stats[i];
-				stats.odropped += to_drop;
-				stats.opackets += txSize;
-				stats.obytes += bytes;
+				                                   CONFIG_YADECAP_MBUFS_BURST_SIZE);
+				rte_pktmbuf_free_bulk(operational, rxSize);
 			}
-
-			/// recv from in.X/out.X/drop.X interfaces and free packets
-			for (int i = 0; i < slowWorker->basePermanently.ports.size(); ++i)
+			for (auto& iface : drop_dump_kernel_interfaces)
 			{
-				for (auto& iface : in_dump_kernel_interfaces)
-				{
 
-					unsigned rxSize = rte_eth_rx_burst(iface.kernel_port_id,
-					                                   0,
-					                                   operational,
-					                                   CONFIG_YADECAP_MBUFS_BURST_SIZE);
-					rte_pktmbuf_free_bulk(operational, rxSize);
-				}
-				for (auto& iface : out_dump_kernel_interfaces)
-				{
-
-					unsigned rxSize = rte_eth_rx_burst(iface.kernel_port_id,
-					                                   0,
-					                                   operational,
-					                                   CONFIG_YADECAP_MBUFS_BURST_SIZE);
-					rte_pktmbuf_free_bulk(operational, rxSize);
-				}
-				for (auto& iface : drop_dump_kernel_interfaces)
-				{
-
-					unsigned rxSize = rte_eth_rx_burst(iface.kernel_port_id,
-					                                   0,
-					                                   operational,
-					                                   CONFIG_YADECAP_MBUFS_BURST_SIZE);
-					rte_pktmbuf_free_bulk(operational, rxSize);
-				}
+				unsigned rxSize = rte_eth_rx_burst(iface.kernel_port_id,
+				                                   0,
+				                                   operational,
+				                                   CONFIG_YADECAP_MBUFS_BURST_SIZE);
+				rte_pktmbuf_free_bulk(operational, rxSize);
 			}
 		}
+	}
 
-		/// push packets to slow worker
-		while (!slowWorkerMbufs.empty())
+	/// push packets to slow worker
+	while (!slowWorkerMbufs.empty())
+	{
+		for (unsigned int i = 0;
+		     i < CONFIG_YADECAP_MBUFS_BURST_SIZE;
+		     i++)
 		{
-			for (unsigned int i = 0;
-			     i < CONFIG_YADECAP_MBUFS_BURST_SIZE;
-			     i++)
+			if (slowWorkerMbufs.empty())
 			{
-				if (slowWorkerMbufs.empty())
-				{
-					break;
-				}
-
-				auto& tuple = slowWorkerMbufs.front();
-				slowWorker->slowWorkerFlow(std::get<0>(tuple), std::get<1>(tuple));
-
-				slowWorkerMbufs.pop();
+				break;
 			}
 
-			slowWorker->slowWorkerHandlePackets();
+			auto& tuple = slowWorkerMbufs.front();
+			slowWorker->slowWorkerFlow(std::get<0>(tuple), std::get<1>(tuple));
+
+			slowWorkerMbufs.pop();
 		}
 
-		slowWorker->slowWorkerAfterHandlePackets();
+		slowWorker->slowWorkerHandlePackets();
+	}
 
-		/// @todo: AUTOTEST_CONTROLPLANE
+	slowWorker->slowWorkerAfterHandlePackets();
 
-		std::this_thread::yield();
+	/// @todo: AUTOTEST_CONTROLPLANE
 
 #ifdef CONFIG_YADECAP_AUTOTEST
-		std::this_thread::sleep_for(std::chrono::microseconds{1});
+	std::this_thread::sleep_for(std::chrono::microseconds{1});
 #endif // CONFIG_YADECAP_AUTOTEST
+}
+
+void cControlPlane::mainThread()
+{
+	for (;;)
+	{
+		Iteration();
 	}
 }
 

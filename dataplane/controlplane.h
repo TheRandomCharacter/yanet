@@ -20,6 +20,7 @@
 #include "dregress.h"
 #include "fragmentation.h"
 #include "kernel_interface_handle.h"
+#include "slow_worker.h"
 #include "type.h"
 
 class cControlPlane ///< @todo: move to cDataPlane
@@ -88,6 +89,10 @@ protected:
 	eResult setup_kernel_interfaces_queues();
 	bool set_kernel_interfaces_up();
 
+public:
+	void Iteration();
+
+protected:
 	void mainThread();
 	unsigned ring_handle(rte_ring* ring_to_free_mbuf, rte_ring* ring);
 

@@ -1017,12 +1017,12 @@ void worker_gc_t::handle_samples()
 
 	std::lock_guard<std::mutex> guard(samples_mutex);
 
-	for (const auto& iter : dataplane->workers)
+	for (cWorker* worker : dataplane->workers_vector)
 	{
-		if (iter.second->socketId != socket_id)
+		if (worker->socketId != socket_id)
 			continue;
 
-		auto& sampler = iter.second->sampler;
+		auto& sampler = worker->sampler;
 
 		sampler.visit6([this](auto& sample) {
 			if (samples.size() < YANET_CONFIG_SAMPLES_SIZE * 8)

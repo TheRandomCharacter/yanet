@@ -34,9 +34,11 @@
 #include "dataplane.h"
 #include "debug_latch.h"
 #include "globalbase.h"
+#include "launch.h"
 #include "lpm.h"
 #include "report.h"
 #include "sock_dev.h"
+#include "work_runner.h"
 #include "worker.h"
 
 common::log::LogPriority common::log::logPriority = common::log::TLOG_INFO;
@@ -108,9 +110,49 @@ eResult cDataPlane::init(const std::string& binaryPath,
 		return result;
 	}
 
+	if (config.use_kernel_interface)
+	{
+		result = init_kernel_interfaces();
+		if (result != eResult::success)
+		{
+			return result;
+		}
+	}
+
 	mempool_log = rte_mempool_create("log", YANET_CONFIG_SAMPLES_SIZE, sizeof(samples::sample_t), 0, 0, NULL, NULL, NULL, NULL, SOCKET_ID_ANY, MEMPOOL_F_NO_IOVA_CONTIG);
 
 	result = initGlobalBases();
+	if (result != eResult::success)
+	{
+		return result;
+	}
+
+	for (auto socket : socket_ids)
+	{
+		auto pool = rte_mempool_create(("cp-" + std::to_string(socket)).c_str(),
+		                               CONFIG_YADECAP_MBUFS_COUNT +
+		                                       configValues.fragmentation_size +
+		                                       configValues.master_mempool_size +
+		                                       4 * CONFIG_YADECAP_PORTS_SIZE * CONFIG_YADECAP_MBUFS_BURST_SIZE +
+		                                       4 * ports.size() * configValues.kernel_interface_queue_size,
+		                               CONFIG_YADECAP_MBUF_SIZE,
+		                               0,
+		                               sizeof(struct rte_pktmbuf_pool_private),
+		                               rte_pktmbuf_pool_init,
+		                               nullptr,
+		                               rte_pktmbuf_init,
+		                               nullptr,
+		                               socket,
+		                               0); ///< multi-producers, multi-consumers
+		if (!pool)
+		{
+			YADECAP_LOG_ERROR("rte_mempool_create(): %s [%u]\n", rte_strerror(rte_errno), rte_errno);
+			return eResult::errorAllocatingMemory;
+		}
+		socket_cplane_mempools.emplace(socket, pool);
+	}
+
+	result = InitSlowWorkers();
 	if (result != eResult::success)
 	{
 		return result;
@@ -129,11 +171,13 @@ eResult cDataPlane::init(const std::string& binaryPath,
 	}
 
 	/// sanity check
-	if (rte_lcore_count() != workers.size() + worker_gcs.size())
+	if (rte_lcore_count() != workers.size() + worker_gcs.size() + slow_workers.size())
 	{
-		YADECAP_LOG_ERROR("invalid cores count: %u != %lu\n",
+		YADECAP_LOG_ERROR("invalid cores count: %u != %luwork + %lugc + %luslow\n",
 		                  rte_lcore_count(),
-		                  workers.size());
+		                  workers.size(),
+		                  worker_gcs.size(),
+		                  slow_workers.size());
 		return eResult::invalidCoresCount;
 	}
 
@@ -142,9 +186,8 @@ eResult cDataPlane::init(const std::string& binaryPath,
 		std::set<tSocketId> worker_sockets_used;
 		std::set<tSocketId> gc_sockets_used;
 
-		for (const auto& [core_id, worker] : workers)
+		for (const cWorker* const worker : workers_vector)
 		{
-			(void)core_id;
 			worker_sockets_used.emplace(worker->socketId);
 		}
 
@@ -195,7 +238,7 @@ eResult cDataPlane::init(const std::string& binaryPath,
 	init_worker_base();
 
 	/// init sync barrier
-	int rc = pthread_barrier_init(&initPortBarrier, nullptr, workers.size());
+	int rc = pthread_barrier_init(&initPortBarrier, nullptr, workers.size() + slow_workers.size());
 	if (rc != 0)
 	{
 		YADECAP_LOG_ERROR("pthread_barrier_init() = %d\n", rc);
@@ -203,7 +246,7 @@ eResult cDataPlane::init(const std::string& binaryPath,
 	}
 
 	/// init run sync barrier
-	rc = pthread_barrier_init(&runBarrier, nullptr, workers.size() + worker_gcs.size());
+	rc = pthread_barrier_init(&runBarrier, nullptr, workers.size() + worker_gcs.size() + slow_workers.size());
 	if (rc != 0)
 	{
 		YADECAP_LOG_ERROR("pthread_barrier_init() = %d\n", rc);
@@ -534,6 +577,29 @@ eResult cDataPlane::initPorts()
 	return eResult::success;
 }
 
+eResult cDataPlane::init_kernel_interfaces()
+{
+	const uint16_t queue_size = getConfigValues().kernel_interface_queue_size;
+	for (const auto& [port_id, info] : ports)
+	{
+		const auto& interface_name = std::get<0>(info);
+
+		auto forward = dataplane::KernelInterfaceHandle::MakeKernelInterfaceHandle(interface_name, port_id, queue_size);
+		auto in = dataplane::KernelInterfaceHandle::MakeKernelInterfaceHandle(interface_name, port_id, queue_size);
+		auto out = dataplane::KernelInterfaceHandle::MakeKernelInterfaceHandle(interface_name, port_id, queue_size);
+		auto drop = dataplane::KernelInterfaceHandle::MakeKernelInterfaceHandle(interface_name, port_id, queue_size);
+
+		if (!forward || !in || !out || !drop)
+		{
+			return eResult::errorAllocatingKernelInterface;
+		}
+
+		kni_interface_handles.emplace(port_id, KniHandleBundle{std::move(forward.value()), std::move(in.value()), std::move(out.value()), std::move(drop.value())});
+	}
+
+	return eResult::success;
+}
+
 eResult cDataPlane::initGlobalBases()
 {
 	eResult result = eResult::success;
@@ -696,54 +762,6 @@ eResult cDataPlane::initGlobalBases()
 
 eResult cDataPlane::initWorkers()
 {
-	tQueueId outQueueId = 0;
-
-	/// slow worker
-	{
-		const tCoreId& coreId = config.controlPlaneCoreId;
-		const tSocketId socket_id = rte_lcore_to_socket_id(coreId);
-
-		YADECAP_LOG_INFO("initWorker. coreId: %u [slow worker]\n", coreId);
-
-		auto* worker = memory_manager.create_static<cWorker>("worker",
-		                                                     socket_id,
-		                                                     this);
-		if (!worker)
-		{
-			return eResult::errorAllocatingMemory;
-		}
-
-		dataplane::base::permanently basePermanently;
-		basePermanently.globalBaseAtomic = globalBaseAtomics[socket_id];
-		basePermanently.outQueueId = outQueueId; ///< 0
-		for (const auto& portIter : ports)
-		{
-			if (!basePermanently.ports.Register(portIter.first))
-				return eResult::invalidPortsCount;
-		}
-
-		basePermanently.SWNormalPriorityRateLimitPerWorker = config.SWNormalPriorityRateLimitPerWorker;
-
-		dataplane::base::generation base;
-		base.globalBase = globalBases[socket_id][currentGlobalBaseId];
-
-		eResult result = worker->init(coreId,
-		                              basePermanently,
-		                              base);
-		if (result != eResult::success)
-		{
-			return result;
-		}
-
-		worker->fillStatsNamesToAddrsTable(coreId_to_stats_tables[coreId]);
-
-		workers[coreId] = worker;
-		controlPlane->slowWorker = worker;
-		workers_vector.emplace_back(worker);
-
-		outQueueId++;
-	}
-
 	for (const auto& configWorkerIter : config.workers)
 	{
 		const tCoreId& coreId = configWorkerIter.first;
@@ -870,7 +888,7 @@ eResult cDataPlane::initWorkers()
 			}
 		}
 
-		basePermanently.outQueueId = outQueueId;
+		basePermanently.outQueueId = m_out_queues;
 
 		dataplane::base::generation base;
 		{
@@ -895,7 +913,7 @@ eResult cDataPlane::initWorkers()
 		workers[coreId] = worker;
 		workers_vector.emplace_back(worker);
 
-		outQueueId++;
+		++m_out_queues;
 	}
 
 	/// worker_gc
@@ -980,6 +998,94 @@ eResult cDataPlane::initWorkers()
 	return eResult::success;
 }
 
+eResult cDataPlane::InitSlowWorker(const tCoreId core, const std::vector<tPortId>& ports_to_service)
+{
+
+	// const tCoreId& coreId = config.controlPlaneCoreId;
+	const tSocketId socket_id = rte_lcore_to_socket_id(core);
+
+	YADECAP_LOG_INFO("initWorker. coreId: %u [clontrolplane worker]\n", core);
+
+	auto* worker = memory_manager.create_static<cWorker>("worker",
+	                                                     socket_id,
+	                                                     this);
+	if (!worker)
+	{
+		return eResult::errorAllocatingMemory;
+	}
+
+	dataplane::base::permanently basePermanently;
+	basePermanently.globalBaseAtomic = globalBaseAtomics[socket_id];
+	basePermanently.outQueueId = m_out_queues;
+	for (const auto& port : ports)
+	{
+		if (!basePermanently.ports.Register(port.first))
+			return eResult::invalidPortsCount;
+	}
+
+	basePermanently.SWNormalPriorityRateLimitPerWorker = config.SWNormalPriorityRateLimitPerWorker;
+
+	dataplane::base::generation base;
+	base.globalBase = globalBases[socket_id][currentGlobalBaseId];
+
+	eResult result = worker->init(core,
+	                              basePermanently,
+	                              base);
+	if (result != eResult::success)
+	{
+		return result;
+	}
+
+	worker->fillStatsNamesToAddrsTable(coreId_to_stats_tables[core]);
+
+	// workers[core] = worker;
+	controlPlane->slowWorker = worker;
+	workers_vector.emplace_back(worker);
+	auto slow = new dataplane::SlowWorker(worker,
+	                                      ports_to_service,
+	                                      socket_cplane_mempools.at(socket_id),
+										  InitPortsBarrier(),
+										  RunBarrier());
+	if (!slow)
+	{
+		return eResult::dataplaneIsBroken;
+	}
+	slow_workers.emplace(core, slow);
+	++m_out_queues;
+	return eResult::success;
+}
+
+eResult cDataPlane::InitSlowWorkers()
+{
+	YANET_LOG_INFO("WOOOPS Initializing slow workers\n");
+	for (auto& [core, ifacenames] : config.controlplane_workers)
+	{
+		std::stringstream ss;
+		for (auto& iface: ifacenames)
+		{
+			ss << iface << ',';
+		}
+		YANET_LOG_INFO("controlplane worker on core %d, serving [%s]\n", core, ss.str().c_str());
+		// rte_eth_dev_get_port_by_name(name.data(), &portId);
+		std::vector<tPortId> ifaces;
+		std::transform(ifacenames.begin(), ifacenames.end(), std::back_inserter(ifaces), [](const std::string& name) {
+			tPortId portId;
+			if (rte_eth_dev_get_port_by_name(name.data(), &portId))
+			{
+				YANET_LOG_ERROR("Failed to get port id by interface name \"%s\"\n", name.data());
+				std::terminate();
+			}
+			return portId;
+		});
+		if (auto res = InitSlowWorker(core, ifaces); res != eResult::success)
+		{
+			return res;
+		}
+	}
+
+	return eResult::success;
+}
+
 std::optional<uint64_t> cDataPlane::getCounterValueByName(const std::string& counter_name, uint32_t coreId)
 {
 	if (coreId_to_stats_tables.count(coreId) == 0)
@@ -1005,7 +1111,7 @@ eResult cDataPlane::initQueues()
 		const tPortId& portId = portIter.first;
 
 		for (tQueueId queueId = 0;
-		     queueId < workers.size();
+		     queueId < m_out_queues;
 		     queueId++)
 		{
 			int ret = rte_eth_tx_queue_setup(portId,
@@ -1036,6 +1142,17 @@ void cDataPlane::init_worker_base()
 		base_nexts.emplace_back(worker->socketId, base);
 		base_nexts.emplace_back(worker->socketId, base_next);
 	}
+
+	for (auto& iter : slow_workers)
+	{
+		cWorker* worker = iter.second->GetWorker();
+
+		auto* base = &worker->bases[worker->currentBaseId];
+		auto* base_next = &worker->bases[worker->currentBaseId ^ 1];
+		base_nexts.emplace_back(worker->socketId, base);
+		base_nexts.emplace_back(worker->socketId, base_next);
+	}
+
 	for (auto& [core_id, worker] : worker_gcs)
 	{
 		(void)core_id;
@@ -1059,6 +1176,7 @@ int cDataPlane::lcoreThread(void* args)
 		return 0;
 	}
 
+#if REFACTORED
 	if (exist(dataPlane->workers, rte_lcore_id()))
 	{
 		dataPlane->workers[rte_lcore_id()]->start();
@@ -1067,6 +1185,7 @@ int cDataPlane::lcoreThread(void* args)
 	{
 		dataPlane->worker_gcs[rte_lcore_id()]->start();
 	}
+#endif
 	else
 	{
 		YADECAP_LOG_ERROR("invalid core id: '%u'\n", rte_lcore_id());
@@ -1108,7 +1227,38 @@ void cDataPlane::start()
 	bus.run();
 
 	/// run forwarding plane and control plane
-	rte_eal_mp_remote_launch(lcoreThread, this, CALL_MAIN);
+
+	for (auto& [core, worker] : workers)
+	{
+		dpdk::RunAsWorkerOnCore(core, [worker]() {
+			worker->start();
+		});
+	}
+
+	for (auto& [core, garbage_collector] : worker_gcs)
+	{
+		dpdk::RunAsWorkerOnCore(core, [garbage_collector]() {
+			garbage_collector->start();
+		});
+	}
+
+	for (auto& [core, slow_worker] : slow_workers)
+	{
+		if (core == config.controlPlaneCoreId)
+		{
+			dpdk::RunAsWorkerOnCore(core, [&]() {
+				slow_worker->WaitInit();
+				auto work_runner = dpdk::WorkRunner{slow_worker, controlPlane.get(), dpdk::Yielder{}};
+				work_runner.Run();
+			});
+		}
+		else
+		{
+			dpdk::RunAsWorkerOnCore(core, [slow_worker]() {
+				slow_worker->Start();
+			});
+		}
+	}
 }
 
 void cDataPlane::join()
@@ -1273,7 +1423,7 @@ eResult cDataPlane::splitSharedMemoryPerWorkers()
 	}
 
 	/// split memory per worker
-	for (auto& [core_id, worker] : workers)
+	for (cWorker* worker : workers_vector)
 	{
 		const auto& socket_id = worker->socketId;
 		const auto& it = shm_by_socket_id.find(socket_id);
@@ -1301,7 +1451,7 @@ eResult cDataPlane::splitSharedMemoryPerWorkers()
 				size += RTE_CACHE_LINE_SIZE - size % RTE_CACHE_LINE_SIZE; /// round up
 			}
 
-			auto name = "shm_" + std::to_string(core_id) + "_" + std::to_string(ring_id);
+			auto name = "shm_" + std::to_string(worker->coreId) + "_" + std::to_string(ring_id);
 
 			auto offset = offsets[shm];
 
@@ -1315,7 +1465,7 @@ eResult cDataPlane::splitSharedMemoryPerWorkers()
 
 			worker->dumpRings[ring_id] = ring;
 
-			auto meta = common::idp::get_shm_info::dump_meta(name, tag, unit_size, units_number, core_id, socket_id, key, offset);
+			auto meta = common::idp::get_shm_info::dump_meta(name, tag, unit_size, units_number, worker->coreId, socket_id, key, offset);
 			dumps_meta.emplace_back(meta);
 
 			tag_to_id[tag] = ring_id;
@@ -1324,7 +1474,7 @@ eResult cDataPlane::splitSharedMemoryPerWorkers()
 		}
 	}
 
-	for (auto& [core_id, worker] : workers)
+	for (cWorker* worker : workers_vector)
 	{
 		const auto& socket_id = worker->socketId;
 		const auto& it = shm_by_socket_id.find(socket_id);
@@ -1339,7 +1489,7 @@ eResult cDataPlane::splitSharedMemoryPerWorkers()
 		memset(worker->tsc_deltas, 0, sizeof(dataplane::perf::tsc_deltas));
 		offsets[shm] += sizeof(dataplane::perf::tsc_deltas);
 
-		auto meta = common::idp::get_shm_tsc_info::tsc_meta(core_id, socket_id, key, offset);
+		auto meta = common::idp::get_shm_tsc_info::tsc_meta(worker->coreId, socket_id, key, offset);
 		tscs_meta.emplace_back(meta);
 	}
 
@@ -1458,13 +1608,12 @@ void cDataPlane::switch_worker_base()
 
 	/// collect all base_next
 	std::vector<std::tuple<tSocketId, dataplane::base::generation*>> base_nexts;
-	for (auto& [core_id, worker] : workers)
+	for (cWorker* worker : workers_vector)
 	{
-		(void)core_id;
-
 		auto* base_next = &worker->bases[worker->currentBaseId ^ 1];
 		base_nexts.emplace_back(worker->socketId, base_next);
 	}
+
 	for (auto& [core_id, worker] : worker_gcs)
 	{
 		(void)core_id;

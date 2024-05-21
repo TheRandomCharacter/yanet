@@ -25,8 +25,11 @@
 #include "memory_manager.h"
 #include "neighbor.h"
 #include "report.h"
+#include "slow_worker.h"
 #include "type.h"
 #include "worker_gc.h"
+
+using InterfaceName = std::string;
 
 struct tDataPlaneConfig
 {
@@ -36,7 +39,7 @@ struct tDataPlaneConfig
 	   and an identifier (typically pci id) used to lookup the port within
 	   DPDK.
 	*/
-	std::map<std::string, ///< interfaceName
+	std::map<InterfaceName, ///< interfaceName
 	         std::tuple<std::string, ///< pci
 	                    std::string, ///< name
 	                    bool, ///< symmetric_mode
@@ -46,7 +49,8 @@ struct tDataPlaneConfig
 
 	std::set<tCoreId> workerGCs;
 	tCoreId controlPlaneCoreId;
-	std::map<tCoreId, std::vector<std::string>> workers;
+	std::map<tCoreId, std::vector<InterfaceName>> controlplane_workers;
+	std::map<tCoreId, std::vector<InterfaceName>> workers;
 	bool useHugeMem = true;
 	bool use_kernel_interface = true;
 	uint64_t rssFlags = RTE_ETH_RSS_IP;
@@ -104,6 +108,8 @@ public:
 	{
 		return current_time;
 	}
+	pthread_barrier_t* InitPortsBarrier() { return &initPortBarrier; }
+	pthread_barrier_t* RunBarrier() { return &initPortBarrier; }
 
 protected:
 	eResult parseConfig(const std::string& configFilePath);
@@ -115,9 +121,12 @@ protected:
 
 	eResult initEal(const std::string& binaryPath, const std::string& filePrefix);
 	eResult initPorts();
+	eResult init_kernel_interfaces();
 	eResult initRingPorts();
 	eResult initGlobalBases();
 	eResult initWorkers();
+	eResult InitSlowWorker(const tCoreId core, const std::vector<tPortId>& ports);
+	eResult InitSlowWorkers();
 	eResult initQueues();
 	void init_worker_base();
 
@@ -141,6 +150,15 @@ protected:
 
 	tDataPlaneConfig config;
 
+	struct KniHandleBundle
+	{
+		dataplane::KernelInterfaceHandle forward;
+		dataplane::KernelInterfaceHandle in_dump;
+		dataplane::KernelInterfaceHandle out_dump;
+		dataplane::KernelInterfaceHandle drop_dump;
+	};
+	std::map<tPortId, KniHandleBundle> kni_interface_handles;
+
 	std::map<tPortId,
 	         std::tuple<std::string, ///< interface_name
 	                    std::map<tCoreId, tQueueId>, ///< rx_queues
@@ -150,8 +168,10 @@ protected:
 	                    bool ///< symmetric_mode
 	                    >>
 	        ports;
+	tQueueId m_out_queues = 0;
 	std::map<tCoreId, cWorker*> workers;
 	std::map<tCoreId, worker_gc_t*> worker_gcs;
+	std::map<tCoreId, dataplane::SlowWorker*> slow_workers;
 
 	std::mutex currentGlobalBaseId_mutex;
 	uint8_t currentGlobalBaseId;
@@ -185,6 +205,8 @@ protected:
 
 	std::set<tSocketId> socket_ids;
 	std::map<tSocketId, worker_gc_t*> socket_worker_gcs;
+	std::map<tSocketId, rte_mempool*> socket_cplane_mempools;
+
 	std::vector<cWorker*> workers_vector;
 
 	std::mutex switch_worker_base_mutex;
