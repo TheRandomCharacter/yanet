@@ -579,6 +579,53 @@ eResult cDataPlane::initPorts()
 	return eResult::success;
 }
 
+void cDataPlane::StartInterfaces()
+{
+	/// start devices
+	for (const auto& portIter : ports)
+	{
+		const tPortId& portId = portIter.first;
+
+		int rc = rte_eth_dev_start(portId);
+		if (rc)
+		{
+			YADECAP_LOG_ERROR("can't start eth dev(%d, %d): %s\n",
+			                  rc,
+			                  rte_errno,
+			                  rte_strerror(rte_errno));
+			abort();
+		}
+
+		rte_eth_promiscuous_enable(portId);
+	}
+
+	if (config.use_kernel_interface && !controlPlane->set_kernel_interfaces_up())
+	{
+		abort();
+	}
+}
+
+void cDataPlane::InitPortsBarrier()
+{
+	static int reached{};
+	YANET_LOG_INFO("Reached ports barrier, placing %d\n", ++reached);
+	int rc = pthread_barrier_wait(&initPortBarrier);
+	if (rc == PTHREAD_BARRIER_SERIAL_THREAD)
+	{
+		pthread_barrier_destroy(&initPortBarrier);
+	}
+	else if (rc)
+	{
+		YANET_LOG_ERROR("init_ports_barrier pthread_barrier_wait() = %d\n", rc);
+		abort();
+	}
+
+	if (rte_get_main_lcore() == rte_lcore_id())
+	{
+		StartInterfaces();
+	}
+}
+
 eResult cDataPlane::init_kernel_interfaces()
 {
 	const uint16_t queue_size = getConfigValues().kernel_interface_queue_size;
@@ -1006,7 +1053,7 @@ eResult cDataPlane::InitSlowWorker(const tCoreId core, const std::vector<tPortId
 	// const tCoreId& coreId = config.controlPlaneCoreId;
 	const tSocketId socket_id = rte_lcore_to_socket_id(core);
 
-	YADECAP_LOG_INFO("initWorker. coreId: %u [clontrolplane worker]\n", core);
+	YADECAP_LOG_INFO("initWorker. coreId: %u [controlplane worker]\n", core);
 
 	auto* worker = memory_manager.create_static<cWorker>("worker",
 	                                                     socket_id,
@@ -1040,19 +1087,17 @@ eResult cDataPlane::InitSlowWorker(const tCoreId core, const std::vector<tPortId
 
 	worker->fillStatsNamesToAddrsTable(coreId_to_stats_tables[core]);
 
-	// workers[core] = worker;
-	controlPlane->slowWorker = worker;
 	workers_vector.emplace_back(worker);
 	auto slow = new dataplane::SlowWorker(worker,
 	                                      ports_to_service,
 	                                      socket_cplane_mempools.at(socket_id),
-	                                      InitPortsBarrier(),
 	                                      RunBarrier());
 	if (!slow)
 	{
 		return eResult::dataplaneIsBroken;
 	}
 	slow_workers.emplace(core, slow);
+	YANET_LOG_ERROR("slow workers size is %lu\n", slow_workers.size());
 	++m_out_queues;
 	return eResult::success;
 }
@@ -1168,35 +1213,6 @@ void cDataPlane::init_worker_base()
 	neighbor.update_worker_base(base_nexts);
 }
 
-int cDataPlane::lcoreThread(void* args)
-{
-	cDataPlane* dataPlane = (cDataPlane*)args;
-
-	if (rte_lcore_id() == dataPlane->config.controlPlaneCoreId)
-	{
-		dataPlane->controlPlane->start();
-		return 0;
-	}
-
-#if REFACTORED
-	if (exist(dataPlane->workers, rte_lcore_id()))
-	{
-		dataPlane->workers[rte_lcore_id()]->start();
-	}
-	else if (exist(dataPlane->worker_gcs, rte_lcore_id()))
-	{
-		dataPlane->worker_gcs[rte_lcore_id()]->start();
-	}
-#endif
-	else
-	{
-		YADECAP_LOG_ERROR("invalid core id: '%u'\n", rte_lcore_id());
-		/// @todo: stop
-	}
-
-	return 0;
-}
-
 void cDataPlane::timestamp_thread()
 {
 	uint32_t prev_time = 0;
@@ -1244,22 +1260,36 @@ void cDataPlane::start()
 		});
 	}
 
-	for (auto& [core, slow_worker] : slow_workers)
-	{
+	auto slow_worker_flavor = [&](tCoreId core, dataplane::SlowWorker* slow) -> std::function<void()> {
 		if (core == config.controlPlaneCoreId)
 		{
-			dpdk::RunAsWorkerOnCore(core, [&]() {
-				slow_worker->WaitInit();
-				auto work_runner = dpdk::WorkRunner{slow_worker, controlPlane.get(), dpdk::Yielder{}};
+			return [slow, cp = controlPlane.get()]() {
+				slow->WaitInit();
+				auto work_runner = dpdk::WorkRunner{slow, cp, dpdk::Yielder{}};
 				work_runner.Run();
-			});
+			};
 		}
 		else
 		{
-			dpdk::RunAsWorkerOnCore(core, [slow_worker]() {
-				slow_worker->Start();
-			});
+			return [slow]() {
+				slow->WaitInit();
+				slow->Start();
+			};
 		}
+	};
+
+	for (auto& [core, slow] : slow_workers)
+	{
+		if (core != rte_lcore_id())
+		{
+			dpdk::RunAsWorkerOnCore(core, slow_worker_flavor(core, slow));
+		}
+	}
+
+	if (auto it = slow_workers.find(rte_lcore_id()); it != slow_workers.end())
+	{
+		YANET_LOG_INFO("Making main lcore busy\n");
+		slow_worker_flavor(it->first, it->second)();
 	}
 }
 

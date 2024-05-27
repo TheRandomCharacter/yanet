@@ -108,8 +108,7 @@ public:
 	{
 		return current_time;
 	}
-	pthread_barrier_t* InitPortsBarrier() { return &initPortBarrier; }
-	pthread_barrier_t* RunBarrier() { return &initPortBarrier; }
+	pthread_barrier_t* RunBarrier() { return &runBarrier; }
 
 protected:
 	eResult parseConfig(const std::string& configFilePath);
@@ -127,6 +126,12 @@ protected:
 
 	eResult initEal(const std::string& binaryPath, const std::string& filePrefix);
 	eResult initPorts();
+
+public:
+	void StartInterfaces();
+	void InitPortsBarrier();
+
+protected:
 	eResult init_kernel_interfaces();
 	eResult initRingPorts();
 	eResult initGlobalBases();
@@ -178,10 +183,17 @@ protected:
 	std::map<tCoreId, cWorker*> workers;
 	std::map<tCoreId, worker_gc_t*> worker_gcs;
 	std::map<tCoreId, dataplane::SlowWorker*> slow_workers;
+#if TODO
+	std::map<tCoreId, dataplane::KniWorker*> kni_workers;
+#endif
 
 	std::mutex currentGlobalBaseId_mutex;
 	uint8_t currentGlobalBaseId;
+
+public:
 	std::map<tSocketId, dataplane::globalBase::atomic*> globalBaseAtomics;
+
+protected:
 	size_t numaNodesInUse;
 	std::map<tSocketId, std::array<dataplane::globalBase::generation*, 2>> globalBases;
 	uint32_t globalBaseSerial;

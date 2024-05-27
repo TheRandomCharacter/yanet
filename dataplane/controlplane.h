@@ -135,9 +135,6 @@ protected:
 
 	std::mutex mutex;
 	std::mutex balancer_mutex;
-	std::mutex unrdup_mutex;
-	std::mutex interfaces_ips_mutex;
-	std::mutex vip_vport_proto_mutex;
 
 	rte_mempool* mempool;
 	bool use_kernel_interface;
@@ -175,14 +172,43 @@ protected:
 	std::queue<std::tuple<rte_mbuf*,
 	                      common::globalBase::tFlow>>
 	        slowWorkerMbufs;
-	std::mutex fw_state_multicast_acl_ids_mutex;
-	std::map<common::ipv6_address_t, tAclId> fw_state_multicast_acl_ids;
 
-	// provided by unrdup.cfg, used to clone some icmp packets to neighbor balancers, index is balancer_id
-	std::vector<std::unordered_map<common::ip_address_t, std::unordered_set<common::ip_address_t>>> vip_to_balancers;
+public:
+	template<typename Data>
+	class Sequential
+	{
+		std::mutex mutex_;
+		Data data_;
+		class SequentialAccessor
+		{
+			std::lock_guard<std::mutex> guard_;
+			Data* data_;
+
+		public:
+			SequentialAccessor(std::mutex& mx, Data& d) :
+			        guard_{mx}, data_{d}
+			{}
+			Data& Value() const noexcept { return *data_; }
+			Data* operator->() const noexcept { return data_; }
+			Data& operator*() const { return *data_; }
+		};
+
+	public:
+		SequentialAccessor Accessor()
+		{
+			return SequentialAccessor{mutex_, &data_};
+		}
+	};
+
+	using VipToBalancers = std::vector<std::unordered_map<common::ip_address_t, std::unordered_set<common::ip_address_t>>>;
+	Sequential<VipToBalancers> vip_to_balancers;
+	using VipVportProto = std::vector<std::unordered_set<std::tuple<common::ip_address_t, std::optional<uint16_t>, uint8_t>>>;
 	// check presence prior to cloning
-	std::vector<std::unordered_set<std::tuple<common::ip_address_t, std::optional<uint16_t>, uint8_t>>> vip_vport_proto;
+	Sequential<VipVportProto> vip_vport_proto;
+	using FwStateMulticastAclIds = std::map<common::ipv6_address_t, tAclId>;
+	Sequential<FwStateMulticastAclIds> fw_state_multicast_acl_ids;
 
+protected:
 	std::chrono::high_resolution_clock::time_point prevTimePointForSWRateLimiter;
 
 	uint32_t icmpOutRemainder;

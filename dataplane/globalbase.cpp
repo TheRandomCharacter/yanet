@@ -2450,8 +2450,8 @@ eResult generation::fwstate_synchronization_update(const common::idp::updateGlob
 		fw_state_multicast_acl_ids.emplace(multicastIpv6Address, aclId);
 	}
 
-	std::lock_guard<std::mutex> lock(dataPlane->controlPlane->fw_state_multicast_acl_ids_mutex);
-	std::swap(dataPlane->controlPlane->fw_state_multicast_acl_ids, fw_state_multicast_acl_ids);
+	auto fsm_ids = dataPlane->controlPlane->fw_state_multicast_acl_ids.Accessor();
+	std::swap(*fsm_ids, fw_state_multicast_acl_ids);
 
 	return eResult::success;
 }

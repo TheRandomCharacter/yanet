@@ -78,49 +78,6 @@ void cControlPlane::start()
 		return;
 	}
 
-	/// start devices
-	for (const auto& portIter : dataPlane->ports)
-	{
-		const tPortId& portId = portIter.first;
-
-		int rc = rte_eth_dev_start(portId);
-		if (rc)
-		{
-			YADECAP_LOG_ERROR("can't start eth dev(%d, %d): %s\n",
-			                  rc,
-			                  rte_errno,
-			                  rte_strerror(rte_errno));
-			abort();
-		}
-
-		rte_eth_promiscuous_enable(portId);
-	}
-
-	if (use_kernel_interface)
-	{
-		if (init_kernel_interfaces() != eResult::success)
-		{
-			abort();
-		}
-	}
-
-	rc = pthread_barrier_wait(&dataPlane->runBarrier);
-	if (rc == PTHREAD_BARRIER_SERIAL_THREAD)
-	{
-		pthread_barrier_destroy(&dataPlane->runBarrier);
-	}
-	else if (rc != 0)
-	{
-		YADECAP_LOG_ERROR("pthread_barrier_wait() = %d\n", rc);
-		/// @todo: stop
-		return;
-	}
-
-	if (use_kernel_interface && !set_kernel_interfaces_up())
-	{
-		abort();
-	}
-
 	mainThread();
 }
 
@@ -1059,32 +1016,32 @@ common::idp::balancer_real_connections::response cControlPlane::balancer_real_co
 
 eResult cControlPlane::unrdup_vip_to_balancers(const common::idp::unrdup_vip_to_balancers::request& request)
 {
-	std::lock_guard<std::mutex> guard(unrdup_mutex);
+	auto vtb = vip_to_balancers.Accessor();
 
 	uint32_t balancer_id = std::get<0>(request);
 
-	if (vip_to_balancers.size() <= balancer_id)
+	if (vtb->size() <= balancer_id)
 	{
-		vip_to_balancers.resize(balancer_id + 1);
+		vtb->resize(balancer_id + 1);
 	}
 
-	vip_to_balancers[balancer_id] = std::get<1>(request);
+	(*vtb)[balancer_id] = std::get<1>(request);
 
 	return eResult::success;
 }
 
 eResult cControlPlane::update_vip_vport_proto(const common::idp::update_vip_vport_proto::request& request)
 {
-	std::lock_guard<std::mutex> guard(vip_vport_proto_mutex);
+	auto vvp = vip_vport_proto.Accessor();
 
 	uint32_t balancer_id = std::get<0>(request);
 
-	if (vip_vport_proto.size() <= balancer_id)
+	if (vvp->size() <= balancer_id)
 	{
-		vip_vport_proto.resize(balancer_id + 1);
+		vvp->resize(balancer_id + 1);
 	}
 
-	vip_vport_proto[balancer_id] = std::get<1>(request);
+	(*vvp)[balancer_id] = std::get<1>(request);
 
 	return eResult::success;
 }
@@ -1475,6 +1432,7 @@ void cControlPlane::flush_kernel_interface(KniPortData& port_data)
 
 void cControlPlane::Iteration()
 {
+	YANET_LOG_ERROR("ControlPlane iteration\n");
 	rte_mbuf* operational[CONFIG_YADECAP_MBUFS_BURST_SIZE];
 
 	if (dataPlane->config.SWNormalPriorityRateLimitPerWorker || dataPlane->config.SWICMPOutRateLimit)
@@ -2734,9 +2692,11 @@ void cControlPlane::handlePacket_balancer_icmp_forward(rte_mbuf* mbuf)
 		--icmpOutRemainder;
 	}
 
+#if REMOVED
 	std::lock_guard<std::mutex> unrdup_guard(unrdup_mutex);
 	std::lock_guard<std::mutex> interfaces_ips_guard(interfaces_ips_mutex);
 	std::lock_guard<std::mutex> services_guard(vip_vport_proto_mutex);
+#endif
 
 	const auto& base = slowWorker->bases[slowWorker->localBaseId & 1];
 

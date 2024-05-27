@@ -75,8 +75,11 @@ protected:
 	YANET_NEVER_INLINE void mainThread();
 
 	inline void calcHash(rte_mbuf* mbuf, uint8_t without_ports = 0);
+
+public:
 	void preparePacket(rte_mbuf* mbuf); ///< @todo: inline
 
+protected:
 	constexpr static uint32_t translation_ignore = 0xFFFFFFFFu;
 	inline void translation_ipv4_to_ipv6(rte_mbuf* mbuf, const ipv6_address_t& ipv6_source, const ipv6_address_t& ipv6_destination, const uint32_t port_source, const uint32_t port_destination, const uint32_t identifier);
 	inline void translation_ipv6_to_ipv4(rte_mbuf* mbuf, const ipv4_address_t& ipv4_source, const ipv4_address_t& ipv4_destination, const uint32_t port_source, const uint32_t port_destination, const uint32_t identifier);
@@ -219,7 +222,9 @@ public:
 	YANET_NEVER_INLINE void slowWorkerAfterHandlePackets();
 	YANET_NEVER_INLINE void slowWorkerFlow(rte_mbuf* mbuf, const common::globalBase::tFlow& flow);
 	YANET_NEVER_INLINE void slowWorkerTranslation(rte_mbuf* mbuf, const dataplane::globalBase::tNat64stateless& nat64stateless, const dataplane::globalBase::nat64stateless_translation_t& translation, bool direction); /** true: ingress, false: egress */
-
+	const dataplane::base::generation& CurrentBase() { return bases[localBaseId & 1]; }
+	void IncrementCounter(common::globalBase::static_counter_type type) { counters[(uint32_t)type]++; }
+	uint32_t CurrentTime(){return basePermanently.globalBaseAtomic->currentTime; }
 public:
 	friend class cDataPlane;
 	friend class cReport;
@@ -319,12 +324,15 @@ protected:
 	worker::tStack<> after_early_decap_stack4;
 	worker::tStack<> after_early_decap_stack6;
 
+public:
 	rte_ring* ring_highPriority;
 	rte_ring* ring_normalPriority;
 	rte_ring* ring_lowPriority;
 	dataplane::perf::tsc_deltas* tsc_deltas;
 	rte_ring* ring_toFreePackets;
+	common::worker::stats::common& Stats() { return stats; }
 
+protected:
 	rte_ring* ring_log;
 
 	common::worker::stats::common stats;

@@ -257,16 +257,7 @@ void cWorker::start()
 		abort();
 	}
 
-	rc = pthread_barrier_wait(&dataPlane->initPortBarrier);
-	if (rc == PTHREAD_BARRIER_SERIAL_THREAD)
-	{
-		pthread_barrier_destroy(&dataPlane->initPortBarrier);
-	}
-	else if (rc != 0)
-	{
-		YADECAP_LOG_ERROR("pthread_barrier_wait() = %d\n", rc);
-		abort();
-	}
+	dataPlane->InitPortsBarrier();
 
 	rc = pthread_barrier_wait(&dataPlane->runBarrier);
 	if (rc == PTHREAD_BARRIER_SERIAL_THREAD)
