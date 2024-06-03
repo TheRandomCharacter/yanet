@@ -7,12 +7,35 @@
 
 namespace common
 {
+#if REMOVE
+template<typename T, typename U>
+using mapiter = std::map<T, U>::iterator;
+
+template<typename... Args>
+using iterator_indices = std::tuple<mapiter<Args, node_base_t*>...>;
+
+template<typename Val,
+         typename... Keys>
+class Iterator
+{
+	iterator_indices<Keys...> pos;
+	iterator_ends<Keys...> ends;
+
+public:
+	Val& operator*()
+	{
+		return std::get<sizeof...(Args) - 1>
+	}
+};
+#endif
 
 template<std::size_t values_size_T,
          typename... counters_T>
 class ctree
 {
 public:
+	using values_t = std::array<uint64_t, values_size_T>;
+
 	ctree()
 	{
 		if constexpr (sizeof...(counters_T) > 0)
@@ -34,7 +57,7 @@ public:
 
 public:
 	void append(const counters_T&... counters,
-	            const std::array<uint64_t, values_size_T>& values)
+	            const values_t& values)
 	{
 		if constexpr (sizeof...(counters_T) > 0)
 		{
@@ -47,7 +70,7 @@ public:
 	}
 
 	void apply(const counters_T&... counters,
-	           const std::function<void(const std::tuple<std::optional<counters_T>...>, std::array<uint64_t, values_size_T>&)>& callback)
+	           const std::function<void(const std::tuple<std::optional<counters_T>...>, values_t&)>& callback)
 	{
 		std::tuple<std::optional<counters_T>...> keys;
 
@@ -84,7 +107,7 @@ public:
 	}
 
 	void print(const std::vector<std::string>& key_names,
-	           const std::function<void(const std::string& key, const std::array<uint64_t, values_size_T>&)>& callback) const
+	           const std::function<void(const std::string& key, const values_t&)>& callback) const
 	{
 		root_node->print("", 0, key_names, callback);
 	}
@@ -99,34 +122,29 @@ public:
 		root_node->push(stream);
 	}
 
+	void merge(const ctree<values_size_T, counters_T...>& other)
+	{
+		root_node->merge(other.root_node);
+	}
+
 public:
 	class node_base_t
 	{
 	public:
-		node_base_t()
-		{
-			for (auto& value : values)
-			{
-				value = 0;
-			}
-		}
-
-		virtual ~node_base_t()
-		{
-		}
+		node_base_t() = default;
+		node_base_t(const node_base_t& other) :
+		        values{other.values} {}
+		node_base_t(const values_t& values) :
+		        values{values} {}
+		virtual ~node_base_t() = default;
 
 	public:
-		void append(const std::array<uint64_t, values_size_T>& values)
+		void append(const values_t& values)
 		{
-			for (std::size_t i = 0;
-			     i < values_size_T;
-			     i++)
-			{
-				this->values[i] += values[i];
-			}
+			this->values += values;
 		}
 
-		void apply(const std::function<void(const std::tuple<std::optional<counters_T>...>, std::array<uint64_t, values_size_T>&)>& callback,
+		void apply(const std::function<void(const std::tuple<std::optional<counters_T>...>, values_t&)>& callback,
 		           std::tuple<std::optional<counters_T>...>& keys)
 		{
 			callback(keys, this->values);
@@ -135,7 +153,7 @@ public:
 		virtual void print(const std::string& key,
 		                   const uint32_t& key_index,
 		                   const std::vector<std::string>& key_names,
-		                   const std::function<void(const std::string& key, const std::array<uint64_t, values_size_T>&)>& callback) const
+		                   const std::function<void(const std::string& key, const values_t&)>& callback) const
 		{
 			(void)key_index;
 			(void)key_names;
@@ -153,8 +171,13 @@ public:
 			stream.push(values);
 		}
 
+		virtual void merge(const node_base_t* other)
+		{
+			this->values += other->values;
+		}
+
 	public:
-		std::array<uint64_t, values_size_T> values;
+		values_t values;
 	};
 
 	template<typename next_counter_T,
@@ -162,6 +185,22 @@ public:
 	class node_t : public node_base_t
 	{
 	public:
+		node_t() = default;
+		node_t(const node_t& other) :
+		        node_base_t{other}, convert{other.convert}
+		{
+			for (const auto& [key, value] : other.next)
+			{
+				if constexpr (sizeof...(next_counters_T) != 0)
+				{
+					next.emplace(key, new node_t{*static_cast<node_t*>(value)});
+				}
+				else
+				{
+					next.emplace(key, new node_base_t{*value});
+				}
+			}
+		}
 		~node_t() override
 		{
 			for (auto& [next_counter, next_node] : next)
@@ -177,7 +216,7 @@ public:
 
 		void append(const next_counter_T& next_counter,
 		            const next_counters_T&... next_counters,
-		            const std::array<uint64_t, values_size_T>& values)
+		            const values_t& values)
 		{
 			node_base_t::append(values);
 
@@ -205,7 +244,7 @@ public:
 
 		void apply(const next_counter_T& next_counter,
 		           const next_counters_T&... next_counters,
-		           const std::function<void(const std::tuple<std::optional<counters_T>...>, std::array<uint64_t, values_size_T>&)>& callback,
+		           const std::function<void(const std::tuple<std::optional<counters_T>...>, values_t&)>& callback,
 		           std::tuple<std::optional<counters_T>...>& keys)
 		{
 			node_base_t::apply(callback, keys);
@@ -252,7 +291,7 @@ public:
 		void print(const std::string& key,
 		           const uint32_t& key_index,
 		           const std::vector<std::string>& key_names,
-		           const std::function<void(const std::string& key, const std::array<uint64_t, values_size_T>&)>& callback) const override
+		           const std::function<void(const std::string& key, const values_t&)>& callback) const override
 		{
 			node_base_t::print(key, key_index, key_names, callback);
 
@@ -323,6 +362,37 @@ public:
 			}
 		}
 
+		void merge(const node_base_t* other) override
+		{
+			for (const auto& [key, node] : reinterpret_cast<const node_t*>(other)->next)
+			{
+				if (auto it = next.find(key); it != next.end())
+				{
+					it->second->merge(node);
+				}
+				else
+				{
+					if constexpr (sizeof...(next_counters_T) != 0)
+					{
+						using actual = node_t<next_counters_T...>;
+						next.emplace(key, new actual(*reinterpret_cast<actual*>(node)));
+					}
+					else
+					{
+						next.emplace(key, new node_base_t(*node));
+					}
+				}
+			}
+
+			for (const auto& [key, value] : reinterpret_cast<const node_t*>(other)->convert)
+			{
+				if (convert.find(key) == convert.end())
+				{
+					convert.emplace(key, value);
+				}
+			}
+		}
+
 	public:
 		std::map<next_counter_T,
 		         node_base_t*>
@@ -335,5 +405,14 @@ public:
 
 	node_base_t* root_node;
 };
+
+inline typename std::array<uint64_t, 4>& operator+=(std::array<uint64_t, 4>& a, const std::array<uint64_t, 4>& b)
+{
+	for (std::size_t i = 0, e = a.size(); i < e; ++i)
+	{
+		a[i] += b[i];
+	}
+	return a;
+}
 
 }
