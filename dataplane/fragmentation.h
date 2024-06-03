@@ -42,11 +42,16 @@ using value_t = std::tuple<std::map<uint32_t, ///< range_from
 class fragmentation_t
 {
 public:
-	fragmentation_t(cControlPlane* controlPlane, cDataPlane* dataPlane);
+	using OnReassembled = std::function<void(rte_mbuf*, const common::globalBase::tFlow&)>;
+	fragmentation_t(OnReassembled callback,
+	                uint64_t timeout_first,
+	                uint64_t timeout_last,
+	                uint64_t packets_per_flow,
+	                uint64_t size_limit);
 	~fragmentation_t();
 
 public:
-	common::fragmentation::stats_t getStats();
+	common::fragmentation::stats_t getStats() const;
 
 	void insert(rte_mbuf* mbuf);
 	void handle();
@@ -58,7 +63,13 @@ protected:
 
 protected:
 	cControlPlane* controlPlane;
-	cDataPlane* dataPlane;
+
+	OnReassembled callback_;
+
+	uint64_t timeout_first_;
+	uint64_t timeout_last_;
+	uint64_t packets_per_flow_;
+	uint64_t size_limit_;
 
 	common::fragmentation::stats_t stats;
 

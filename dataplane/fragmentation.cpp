@@ -1,12 +1,17 @@
 #include "fragmentation.h"
 #include "common.h"
 #include "controlplane.h"
-#include "dataplane.h"
 
-fragmentation_t::fragmentation_t(cControlPlane* controlPlane,
-                                 cDataPlane* dataPlane) :
-        controlPlane(controlPlane),
-        dataPlane(dataPlane)
+fragmentation_t::fragmentation_t(OnReassembled callback,
+	                uint64_t timeout_first,
+	                uint64_t timeout_last,
+	                uint64_t packets_per_flow,
+	                uint64_t size_limit) :
+        callback_{callback},
+		timeout_first_{timeout_first},
+		timeout_last_{timeout_last},
+		packets_per_flow_{packets_per_flow},
+		size_limit_{size_limit}
 {
 	memset(&stats, 0, sizeof(stats));
 }
@@ -29,14 +34,14 @@ fragmentation_t::~fragmentation_t()
 	}
 }
 
-common::fragmentation::stats_t fragmentation_t::getStats()
+common::fragmentation::stats_t fragmentation_t::getStats() const
 {
 	return stats;
 }
 
 void fragmentation_t::insert(rte_mbuf* mbuf)
 {
-	if (stats.current_count_packets > dataPlane->getConfigValues().fragmentation_size)
+	if (stats.current_count_packets > size_limit_)
 	{
 		stats.total_overflow_packets++;
 		rte_pktmbuf_free(mbuf);
@@ -137,7 +142,7 @@ void fragmentation_t::insert(rte_mbuf* mbuf)
 	{
 		auto& value = fragments[key];
 
-		if (std::get<0>(value).size() > dataPlane->getConfigValues().fragmentation_packets_per_flow)
+		if (std::get<0>(value).size() > packets_per_flow_)
 		{
 			stats.flow_overflow_packets++;
 			rte_pktmbuf_free(mbuf);
@@ -214,7 +219,7 @@ void fragmentation_t::handle()
 				dataplane::metadata* metadata = YADECAP_METADATA(mbuf);
 				metadata->flow.data = firstPacket_metadata->flow.data;
 
-				controlPlane->sendPacketToSlowWorker(mbuf, metadata->flow);
+				callback_(mbuf, metadata->flow);
 				stats.current_count_packets--;
 			}
 
@@ -246,12 +251,12 @@ bool fragmentation_t::isTimeout(const fragmentation::value_t& value)
 {
 	uint16_t currentTime = time(nullptr);
 
-	if ((uint16_t)(currentTime - std::get<1>(value)) >= dataPlane->getConfigValues().fragmentation_timeout_first)
+	if ((uint16_t)(currentTime - std::get<1>(value)) >= timeout_first_)
 	{
 		return true;
 	}
 
-	if ((uint16_t)(currentTime - std::get<2>(value)) >= dataPlane->getConfigValues().fragmentation_timeout_last)
+	if ((uint16_t)(currentTime - std::get<2>(value)) >= timeout_last_)
 	{
 		return true;
 	}
