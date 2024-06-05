@@ -25,12 +25,22 @@
 
 class cControlPlane ///< @todo: move to cDataPlane
 {
+protected:
+	struct sKniStats
+	{
+		uint64_t ipackets = 0;
+		uint64_t ibytes = 0;
+		uint64_t idropped = 0;
+		uint64_t opackets = 0;
+		uint64_t obytes = 0;
+		uint64_t odropped = 0;
+	};
+
 public:
 	cControlPlane(cDataPlane* dataPlane);
 	virtual ~cControlPlane();
 
 	eResult init(bool use_kernel_interface);
-	void start();
 	void stop();
 	void join();
 
@@ -38,14 +48,19 @@ public:
 	eResult updateGlobalBaseBalancer(const common::idp::updateGlobalBaseBalancer::request& request);
 	common::idp::getGlobalBase::response getGlobalBase(const common::idp::getGlobalBase::request& request);
 	common::idp::getWorkerStats::response getWorkerStats(const common::idp::getWorkerStats::request& request);
-	common::idp::getSlowWorkerStats::response getSlowWorkerStats();
+	common::slowworker::stats_t SlowWorkerStats() const;
+	common::idp::getSlowWorkerStats::response SlowWorkerStatsResponse();
 	common::idp::get_worker_gc_stats::response get_worker_gc_stats();
 	common::idp::get_dregress_counters::response get_dregress_counters();
 	common::idp::get_ports_stats::response get_ports_stats();
 	common::idp::get_ports_stats_extended::response get_ports_stats_extended();
 	common::idp::getControlPlanePortStats::response getControlPlanePortStats(const common::idp::getControlPlanePortStats::request& request);
 	common::idp::getPortStatsEx::response getPortStatsEx();
-	common::idp::getFragmentationStats::response getFragmentationStats();
+	common::idp::getFragmentationStats::response getFragmentationStats() const;
+	common::dregress::stats_t DregressStats() const;
+	std::optional<std::reference_wrapper<const dataplane::sKniStats>> KniStats(tPortId) const;
+	dataplane::hashtable_chain_spinlock_stats_t DregressConnectionsStats() const;
+	dregress::LimitsStats DregressLimitsStats() const;
 	common::idp::getFWState::response getFWState();
 	common::idp::getFWStateStats::response getFWStateStats();
 	eResult clearFWState();
@@ -78,7 +93,6 @@ public:
 	virtual void waitAllWorkers();
 
 	void sendPacketToSlowWorker(rte_mbuf* mbuf, const common::globalBase::tFlow& flow); ///< @todo: remove flow
-	void freeWorkerPacket(rte_ring* ring_to_free_mbuf, rte_mbuf* mbuf);
 
 protected:
 	eResult initMempool();
@@ -90,27 +104,10 @@ protected:
 	bool set_kernel_interfaces_up();
 
 public:
-	void Iteration();
-
 protected:
 	void mainThread();
-	unsigned ring_handle(rte_ring* ring_to_free_mbuf, rte_ring* ring);
-
-	void handlePacketFromForwardingPlane(rte_mbuf* mbuf); ///< @todo: rename
-	void handlePacket_icmp_translate_v6_to_v4(rte_mbuf* mbuf);
-	void handlePacket_icmp_translate_v4_to_v6(rte_mbuf* mbuf);
-	void handlePacket_dregress(rte_mbuf* mbuf);
-	void handlePacket_repeat(rte_mbuf* mbuf);
-	void handlePacket_fragment(rte_mbuf* mbuf);
-	void handlePacket_farm(rte_mbuf* mbuf);
-	void handlePacket_fw_state_sync(rte_mbuf* mbuf);
-	bool handlePacket_fw_state_sync_ingress(rte_mbuf* mbuf);
-	void handlePacket_balancer_icmp_forward(rte_mbuf* mbuf);
-	void handlePacket_dump(rte_mbuf* mbuf);
 
 	void SWRateLimiterTimeTracker();
-
-	rte_mbuf* convertMempool(rte_ring* ring_to_free_mbuf, rte_mbuf* mbuf);
 
 protected:
 	friend class cReport;
@@ -118,20 +115,7 @@ protected:
 	friend class dataplane::globalBase::generation;
 	friend class dregress_t;
 
-	struct sKniStats
-	{
-		uint64_t ipackets = 0;
-		uint64_t ibytes = 0;
-		uint64_t idropped = 0;
-		uint64_t opackets = 0;
-		uint64_t obytes = 0;
-		uint64_t odropped = 0;
-	};
-
 	cDataPlane* dataPlane;
-
-	fragmentation_t fragmentation;
-	dregress_t dregress;
 
 	std::mutex mutex;
 	std::mutex balancer_mutex;
@@ -168,7 +152,6 @@ protected:
 	common::slowworker::stats_t stats;
 	common::idp::getErrors::response errors; ///< @todo: class errorsManager
 
-	cWorker* slowWorker;
 	std::queue<std::tuple<rte_mbuf*,
 	                      common::globalBase::tFlow>>
 	        slowWorkerMbufs;
@@ -182,21 +165,24 @@ public:
 		class SequentialAccessor
 		{
 			std::lock_guard<std::mutex> guard_;
-			Data* data_;
+			Data& data_;
 
 		public:
 			SequentialAccessor(std::mutex& mx, Data& d) :
 			        guard_{mx}, data_{d}
 			{}
-			Data& Value() const noexcept { return *data_; }
-			Data* operator->() const noexcept { return data_; }
-			Data& operator*() const { return *data_; }
+			SequentialAccessor(SequentialAccessor&& other) :
+			        guard_{std::move(other.guard_)}, data_{other.data_}
+			{}
+			Data& Value() const noexcept { return data_; }
+			Data* operator->() const noexcept { return &data_; }
+			Data& operator*() const { return data_; }
 		};
 
 	public:
 		SequentialAccessor Accessor()
 		{
-			return SequentialAccessor{mutex_, &data_};
+			return SequentialAccessor{mutex_, data_};
 		}
 	};
 

@@ -22,6 +22,7 @@
 #include "config_values.h"
 #include "controlplane.h"
 #include "globalbase.h"
+#include "kernel_interface_handler.h"
 #include "memory_manager.h"
 #include "neighbor.h"
 #include "report.h"
@@ -109,6 +110,7 @@ public:
 		return current_time;
 	}
 	pthread_barrier_t* RunBarrier() { return &runBarrier; }
+	std::string InterfaceNameFromPort(tPortId id) {return std::get<0>(ports[id]); };
 
 protected:
 	eResult parseConfig(const std::string& configFilePath);
@@ -133,12 +135,15 @@ public:
 
 protected:
 	eResult init_kernel_interfaces();
+	bool KNIAddTxQueue(tQueueId queue, tSocketId socket);
+	bool KNIAddRxQueue(tQueueId queue, tSocketId socket, rte_mempool* mempool);
 	eResult initRingPorts();
 	eResult initGlobalBases();
 	eResult initWorkers();
 	eResult InitSlowWorker(const tCoreId core, const std::vector<tPortId>& ports);
 	eResult InitSlowWorkers();
-	eResult initQueues();
+	eResult initTxQueues();
+	eResult initKniQueues();
 	void init_worker_base();
 
 	eResult allocateSharedMemory();
@@ -183,9 +188,7 @@ protected:
 	std::map<tCoreId, cWorker*> workers;
 	std::map<tCoreId, worker_gc_t*> worker_gcs;
 	std::map<tCoreId, dataplane::SlowWorker*> slow_workers;
-#if TODO
-	std::map<tCoreId, dataplane::KniWorker*> kni_workers;
-#endif
+	std::map<tCoreId, dataplane::KernelInterfaceWorker*> kni_workers;
 
 	std::mutex currentGlobalBaseId_mutex;
 	uint8_t currentGlobalBaseId;

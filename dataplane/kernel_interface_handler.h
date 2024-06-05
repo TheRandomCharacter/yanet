@@ -1,4 +1,5 @@
 #pragma once
+#include <iterator>
 #include <vector>
 
 #include <rte_ethdev.h>
@@ -6,9 +7,14 @@
 #include "base.h"
 #include "metadata.h"
 
-
 namespace dataplane
 {
+
+struct Endpoint
+{
+	tPortId port;
+	tQueueId queue;
+};
 
 struct sKniStats
 {
@@ -31,6 +37,10 @@ public:
 	KernelInterface() = default;
 	KernelInterface(tPortId port, tQueueId queue) :
 	        m_port{port}, m_queue{queue}
+	{
+	}
+	KernelInterface(const Endpoint& e) :
+	        m_port{e.port}, m_queue{e.queue}
 	{
 	}
 	void Flush()
@@ -81,52 +91,57 @@ public:
 		}
 		m_burst[m_burst_length++] = mbuf;
 	}
+	DirectionStats PushTracked(rte_mbuf* mbuf)
+	{
+		DirectionStats res;
+		if (m_burst_length == YANET_CONFIG_BURST_SIZE)
+		{
+			res = FlushTracked();
+		}
+		m_burst[m_burst_length++] = mbuf;
+		return res;
+	}
 	const tQueueId& Queue() const
 	{
 		return m_queue;
 	}
 };
 
+struct KernelInterfaceBundleConfig
+{
+	Endpoint phy;
+	Endpoint forward;
+	Endpoint in_dump;
+	Endpoint out_dump;
+	Endpoint drop_dump;
+};
+
+struct KernelInterfaceWorkerConfig
+{
+	std::vector<KernelInterfaceBundleConfig> interfaces;
+	dataplane::base::PortMapper* port_mapper;
+};
+
 class KernelInterfaceWorker
 {
-	std::size_t m_port_count = 0;
-	std::array<tPortId, CONFIG_YADECAP_PORTS_SIZE> m_dpdk_ports;
-	std::array<tQueueId, CONFIG_YADECAP_PORTS_SIZE> m_dpdk_queues;
-	std::array<sKniStats, CONFIG_YADECAP_PORTS_SIZE> m_stats;
-#if DEPRECATED
-	std::array<tPortId, CONFIG_YADECAP_PORTS_SIZE> m_forward_port_ids;
-#endif
-	std::array<KernelInterface, CONFIG_YADECAP_PORTS_SIZE> m_forward;
-	std::array<KernelInterface, CONFIG_YADECAP_PORTS_SIZE> m_in_dump;
-	std::array<KernelInterface, CONFIG_YADECAP_PORTS_SIZE> m_out_dump;
-	std::array<KernelInterface, CONFIG_YADECAP_PORTS_SIZE> m_drop_dump;
-	const dataplane::base::PortMapper* m_port_mapper;
-	uint64_t m_unknown_dump_interface = 0;
-	KernelInterfaceWorker() {}
-	bool AddInterface(std::array<std::pair<tPortId,tQueueId>, 4> psnqs)
-	{
-		m_forward[m_port_count] = KernelInterface{psnqs[0].first, psnqs[0].second};
-		m_forward[m_port_count] = KernelInterface{psnqs[1].first, psnqs[1].second};
-		m_forward[m_port_count] = KernelInterface{psnqs[2].first, psnqs[2].second};
-		m_forward[m_port_count] = KernelInterface{psnqs[3].first, psnqs[3].second};
-		m_port_count++;
-	}
-#if DEPRECATED
-	static std::optional<KernelInterfaceHandle> InitInterface(KernelInterface& iface,
-	                                                          const std::string& name,
-	                                                          tPortId port,
-	                                                          tQueueId queue,
-	                                                          rte_mempool* mempool,
-	                                                          uint64_t queue_size)
-	{
-		auto h = KernelInterfaceHandle::MakeKernelInterfaceHandle(name, port, mempool, queue_size);
-		if (h)
-		{
-			iface = {h.value().Id(), queue};
-		}
-		return h;
-	}
-#endif
+public:
+	template<typename T>
+	using PortArray = std::array<T, CONFIG_YADECAP_PORTS_SIZE>;
+	template<typename T>
+	using ConstPortArrayRange = std::pair<typename PortArray<T>::const_iterator, typename PortArray<T>::const_iterator>;
+
+private:
+	std::size_t size_ = 0;
+	PortArray<tPortId> phy_ports_;
+	PortArray<tQueueId> phy_queues_;
+	PortArray<sKniStats> stats_;
+	PortArray<KernelInterface> forward_;
+	PortArray<KernelInterface> in_dump_;
+	PortArray<KernelInterface> out_dump_;
+	PortArray<KernelInterface> drop_dump_;
+	const dataplane::base::PortMapper* port_mapper_;
+	uint64_t unknown_dump_interface_ = 0;
+
 	/**
 	 * @brief Receive packets from interface and free them.
 	 * @param iface Interface to receive packets from.
@@ -139,93 +154,76 @@ class KernelInterfaceWorker
 	}
 
 public:
-	KernelInterfaceWorker(const KernelInterfaceWorker&) = delete;
-	KernelInterfaceWorker(KernelInterfaceWorker&&);
-	KernelInterfaceWorker& operator=(const KernelInterfaceWorker&) = delete;
-	KernelInterfaceWorker& operator=(KernelInterfaceWorker&&);
-	~KernelInterfaceWorker() = default;
-	void Iteration()
+	KernelInterfaceWorker(const KernelInterfaceWorkerConfig& config) :
+	        port_mapper_{config.port_mapper}
 	{
-
-	}
-#if DEPRECATED
-	static std::optional<KernelInterfaceWorker> MakeKernelInterfaceWorker(
-	        const std::vector<std::pair<tPortId, const std::string&>>& ports,
-	        tQueueId queue_id,
-	        rte_mempool* mempool,
-	        uint64_t queue_size)
-	{
-		KernelInterfaceWorker kniworker;
-		for (int i = 0; i < ports.size(); ++i)
+		for (const auto& iface : config.interfaces)
 		{
-			const auto& [phy_id, name] = ports[i];
-			auto forward = InitInterface(kniworker.m_forward[i], name, phy_id, queue_id, mempool, queue_size);
-			auto in_dump = InitInterface(kniworker.m_in_dump[i], "in." + name, phy_id, queue_id, mempool, queue_size);
-			auto out_dump = InitInterface(kniworker.m_out_dump[i], "out." + name, phy_id, queue_id, mempool, queue_size);
-			auto drop_dump = InitInterface(kniworker.m_drop_dump[i], "drop." + name, phy_id, queue_id, mempool, queue_size);
-
-			if (!forward || !in_dump || !out_dump || !drop_dump)
-			{
-				return std::optional<KernelInterfaceWorker>{};
-			}
-			kniworker.m_handles.emplace_back(std::move(forward.value()),
-			                                 std::move(in_dump.value()),
-			                                 std::move(out_dump.value()),
-			                                 std::move(drop_dump.value()));
-			++kniworker.m_port_count;
+			phy_ports_[size_] = iface.phy.port;
+			phy_queues_[size_] = iface.phy.queue;
+			forward_[size_] = KernelInterface{iface.forward};
+			in_dump_[size_] = KernelInterface{iface.in_dump};
+			out_dump_[size_] = KernelInterface{iface.out_dump};
+			drop_dump_[size_] = KernelInterface{iface.drop_dump};
+			++size_;
 		}
-		return std::optional<KernelInterfaceWorker>{std::move(kniworker)};
 	}
 
-	/// @brief Set kernel interface up via ioctl
-	[[nodiscard]] bool SetInterfacesUp()
+	ConstPortArrayRange<tPortId> PortsIds() const
 	{
-		for (int i = 0; i < m_port_count; ++i)
+		return {phy_ports_.begin(), phy_ports_.begin() + size_};
+	}
+	ConstPortArrayRange<sKniStats> PortsStats() const
+	{
+		return {stats_.begin(), stats_.begin() + size_};
+	}
+	std::optional<std::reference_wrapper<const sKniStats>> PortStats(tPortId pid) const
+	{
+		for (std::size_t i = 0; i < size_; ++i)
 		{
-			if (!m_handles[i].forward.SetUp())
+			if (phy_ports_[i] == pid)
 			{
-				return false;
+				return stats_[i];
 			}
 		}
-		return true;
+		return {};
 	}
-#endif
 
 	/// @brief Transmit accumulated packets. Those that could not be sent are freed
 	void Flush()
 	{
-		for (int i = 0; i < m_port_count; ++i)
+		for (std::size_t i = 0; i < size_; ++i)
 		{
-			const auto& delta = m_forward[i].FlushTracked();
-			m_stats[i].opackets += delta.packets;
-			m_stats[i].obytes += delta.bytes;
-			m_stats[i].odropped += delta.dropped;
-			m_in_dump[i].Flush();
-			m_out_dump[i].Flush();
-			m_drop_dump[i].Flush();
+			const auto& delta = forward_[i].FlushTracked();
+			stats_[i].opackets += delta.packets;
+			stats_[i].obytes += delta.bytes;
+			stats_[i].odropped += delta.dropped;
+			in_dump_[i].Flush();
+			out_dump_[i].Flush();
+			drop_dump_[i].Flush();
 		}
 	}
 	/// @brief Receive from in.X/out.X/drop.X interfaces and free packets
 	void RecvFree()
 	{
-		for (int i = 0; i < m_port_count; ++i)
+		for (std::size_t i = 0; i < size_; ++i)
 		{
-			RecvFree(m_in_dump[i]);
-			RecvFree(m_out_dump[i]);
-			RecvFree(m_drop_dump[i]);
+			RecvFree(in_dump_[i]);
+			RecvFree(out_dump_[i]);
+			RecvFree(drop_dump_[i]);
 		}
 	}
 	/// @brief Receive packets from kernel interface and send to physical port
 	void ForwardToPhy()
 	{
-		for (int i = 0; i < m_port_count; ++i)
+		for (std::size_t i = 0; i < size_; ++i)
 		{
 			rte_mbuf* burst[CONFIG_YADECAP_MBUFS_BURST_SIZE];
-			auto packets = rte_eth_rx_burst(m_forward[i].Port(), m_forward[i].Queue(), burst, CONFIG_YADECAP_MBUFS_BURST_SIZE);
+			auto packets = rte_eth_rx_burst(forward_[i].Port(), forward_[i].Queue(), burst, CONFIG_YADECAP_MBUFS_BURST_SIZE);
 			uint64_t bytes = std::accumulate(burst, burst + packets, 0, [](uint64_t total, rte_mbuf* mbuf) {
 				return total + rte_pktmbuf_pkt_len(mbuf);
 			});
-			auto transmitted = rte_eth_tx_burst(m_dpdk_ports[i], m_dpdk_queues[i], burst, packets);
+			auto transmitted = rte_eth_tx_burst(phy_ports_[i], phy_queues_[i], burst, packets);
 			const auto remain = packets - transmitted;
 
 			if (remain)
@@ -236,42 +234,50 @@ public:
 				rte_pktmbuf_free_bulk(burst + transmitted, remain);
 			}
 
-			auto& stats = m_stats[i];
+			auto& stats = stats_[i];
 			stats.opackets += transmitted;
 			stats.obytes += bytes;
 			stats.odropped += remain;
 		}
 	}
-#if DEPRECATED
 	void HandlePacketDump(rte_mbuf* mbuf)
 	{
 		dataplane::metadata* metadata = YADECAP_METADATA(mbuf);
 
-		if (!m_port_mapper->ValidDpdk(metadata->flow.data.dump.id))
+		if (!port_mapper_->ValidDpdk(metadata->flow.data.dump.id))
 		{
-			m_unknown_dump_interface++;
+			unknown_dump_interface_++;
 			rte_pktmbuf_free(mbuf);
 			return;
 		}
-		const auto local_port_id = m_port_mapper->ToLogical(metadata->flow.data.dump.id);
+		const auto local_port_id = port_mapper_->ToLogical(metadata->flow.data.dump.id);
 
 		using dumpType = common::globalBase::dump_type_e;
 		switch (metadata->flow.data.dump.type)
 		{
 			case dumpType::physicalPort_ingress:
-				m_in_dump[local_port_id].Push(mbuf);
+				in_dump_[local_port_id].Push(mbuf);
 				break;
 			case dumpType::physicalPort_egress:
-				m_out_dump[local_port_id].Push(mbuf);
+				out_dump_[local_port_id].Push(mbuf);
 				break;
 			case dumpType::physicalPort_drop:
-				m_drop_dump[local_port_id].Push(mbuf);
+				drop_dump_[local_port_id].Push(mbuf);
 				break;
 			default:
-				m_unknown_dump_interface++;
+				unknown_dump_interface_++;
 				rte_pktmbuf_free(mbuf);
 		}
 	}
-#endif
+	void HandlePacketFromForwardingPlane(rte_mbuf* mbuf)
+	{
+		dataplane::metadata* metadata = YADECAP_METADATA(mbuf);
+
+		const auto i = port_mapper_->ToLogical(metadata->fromPortId);
+		const auto& delta = forward_[i].PushTracked(mbuf);
+		stats_[i].opackets += delta.packets;
+		stats_[i].obytes += delta.bytes;
+		stats_[i].odropped += delta.dropped;
+	}
 };
 } // namespace dataplane

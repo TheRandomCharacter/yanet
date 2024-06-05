@@ -152,6 +152,7 @@ eResult cDataPlane::init(const std::string& binaryPath,
 			return eResult::errorAllocatingMemory;
 		}
 		socket_cplane_mempools.emplace(socket, pool);
+		YANET_LOG_ERROR("created mempool cp-%s\n", std::to_string(socket).c_str());
 	}
 
 	result = InitSlowWorkers();
@@ -159,6 +160,8 @@ eResult cDataPlane::init(const std::string& binaryPath,
 	{
 		return result;
 	}
+
+	YANET_LOG_INFO("Slow workers initilization finished\n");
 
 	result = initWorkers();
 	if (result != eResult::success)
@@ -213,7 +216,7 @@ eResult cDataPlane::init(const std::string& binaryPath,
 	}
 	numaNodesInUse = worker_gcs.size();
 
-	result = initQueues();
+	result = initTxQueues();
 	if (result != eResult::success)
 	{
 		return result;
@@ -647,6 +650,37 @@ eResult cDataPlane::init_kernel_interfaces()
 	}
 
 	return eResult::success;
+}
+
+bool cDataPlane::KNIAddTxQueue(tQueueId queue, tSocketId socket)
+{
+	for (auto& bundle : kni_interface_handles)
+	{
+		auto& [fwd, in, out, drop] = bundle.second;
+		if (!fwd.SetupTxQueue(queue, socket) ||
+		    !in.SetupTxQueue(queue, socket) ||
+		    !out.SetupTxQueue(queue, socket) ||
+		    !drop.SetupTxQueue(queue, socket))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+bool cDataPlane::KNIAddRxQueue(tQueueId queue, tSocketId socket, rte_mempool* mempool)
+{
+	for (auto& bundle : kni_interface_handles)
+	{
+		auto& [fwd, in, out, drop] = bundle.second;
+		if (!fwd.SetupRxQueue(queue, socket, mempool) ||
+		    !in.SetupRxQueue(queue, socket, mempool) ||
+		    !out.SetupRxQueue(queue, socket, mempool) ||
+		    !drop.SetupRxQueue(queue, socket, mempool))
+		{
+			return false;
+		}
+	}
+	return true;
 }
 
 eResult cDataPlane::initGlobalBases()
@@ -1088,8 +1122,30 @@ eResult cDataPlane::InitSlowWorker(const tCoreId core, const std::vector<tPortId
 	worker->fillStatsNamesToAddrsTable(coreId_to_stats_tables[core]);
 
 	workers_vector.emplace_back(worker);
+
+	std::vector<dataplane::KernelInterfaceBundleConfig> kni_bundleconf;
+
+	if (config.use_kernel_interface)
+	{
+		for (tPortId port : ports_to_service)
+		{
+			auto& [fwd, in, out, drop] = kni_interface_handles.at(port);
+			kni_bundleconf.emplace_back(
+			        dataplane::KernelInterfaceBundleConfig{
+			                {port, m_out_queues},
+			                {fwd.Id(), 0},
+			                {in.Id(), 0},
+			                {out.Id(), 0},
+			                {drop.Id(), 0}});
+		}
+	}
+	YANET_LOG_ERROR("ending with kni bundleconf\n");
+
+	dataplane::KernelInterfaceWorkerConfig kni_config{std::move(kni_bundleconf), &basePermanently.ports};
+
 	auto slow = new dataplane::SlowWorker(worker,
 	                                      ports_to_service,
+	                                      kni_config,
 	                                      socket_cplane_mempools.at(socket_id),
 	                                      RunBarrier());
 	if (!slow)
@@ -1151,7 +1207,7 @@ std::optional<uint64_t> cDataPlane::getCounterValueByName(const std::string& cou
 	return std::optional<uint64_t>(counter_value);
 }
 
-eResult cDataPlane::initQueues()
+eResult cDataPlane::initTxQueues()
 {
 	for (const auto& portIter : ports)
 	{
@@ -1174,6 +1230,25 @@ eResult cDataPlane::initQueues()
 		}
 	}
 
+	return eResult::success;
+}
+
+eResult cDataPlane::initKniQueues()
+{
+	for (auto& [port_id, bundle] : kni_interface_handles)
+	{
+		for (std::size_t i = 0, max = slow_workers.size(); i < max; ++i)
+		{
+			const auto& socket_id = rte_eth_dev_socket_id(port_id);
+			KNIAddTxQueue(i, socket_id);
+		}
+
+		for (std::size_t i = 0, max = slow_workers.size(); i < max; ++i)
+		{
+			const auto& socket_id = rte_eth_dev_socket_id(port_id);
+			KNIAddRxQueue(i, socket_id, socket_cplane_mempools.at(socket_id));
+		}
+	}
 	return eResult::success;
 }
 
@@ -1265,7 +1340,7 @@ void cDataPlane::start()
 		{
 			return [slow, cp = controlPlane.get()]() {
 				slow->WaitInit();
-				auto work_runner = dpdk::WorkRunner{slow, cp, dpdk::Yielder{}};
+				auto work_runner = dpdk::WorkRunner{slow, dpdk::Yielder{}};
 				work_runner.Run();
 			};
 		}
