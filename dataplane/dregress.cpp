@@ -16,6 +16,35 @@ dregress_t::dregress_t(dataplane::SlowWorker* slow, cDataPlane* dataplane, uint3
         connections{new dregress::ConnTable},
         gc_step{gc_step}
 {}
+dregress_t::dregress_t(dregress_t&& other):
+	connections{nullptr}
+{
+	*this = std::move(other);
+
+	other.connections = nullptr;
+}
+
+dregress_t& dregress_t::operator=(dregress_t&& other)
+{
+	slow_worker_ = other.slow_worker_;
+	dataplane = other.dataplane;
+	stats = other.stats;
+	std::swap(connections, other.connections);
+
+	auto pre_guard = std::lock_guard(other.prefixes_mutex);
+	std::swap(local_prefixes_v4, other.local_prefixes_v4);
+	std::swap(local_prefixes_v6, other.local_prefixes_v6);
+	std::swap(prefixes, other.prefixes);
+	std::swap(values, other.values);
+
+	auto count_guard = std::lock_guard(other.counters_mutex);
+	std::swap(counters_v4, other.counters_v4);
+	std::swap(counters_v6, other.counters_v6);
+
+	gc_step = other.gc_step;
+	return *this;
+}
+
 
 dregress_t::~dregress_t()
 {

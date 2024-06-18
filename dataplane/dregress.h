@@ -75,7 +75,10 @@ class dregress_t
 {
 public:
 	dregress_t(dataplane::SlowWorker* slow, cDataPlane* dataplane, uint32_t gc_step);
+	dregress_t(dregress_t&& other);
 	~dregress_t();
+
+	dregress_t& operator=(dregress_t&& other);
 
 	void insert(rte_mbuf* mbuf);
 	void handle();
