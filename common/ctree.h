@@ -47,6 +47,17 @@ public:
 			root_node = new node_base_t();
 		}
 	}
+	ctree(ctree&& other): root_node{}
+	{
+		if (this != &other) {
+			*this = std::move(other);
+		}
+	}
+	ctree& operator=(ctree&& other)
+	{
+		std::swap(root_node, other.root_node);
+		return *this;
+	}
 
 	~ctree()
 	{
