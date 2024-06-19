@@ -2,7 +2,7 @@
 #include "common.h"
 #include "controlplane.h"
 
-fragmentation_t::fragmentation_t(OnReassembled callback,
+fragmentation_t::fragmentation_t(OnCollected callback,
 	                uint64_t timeout_first,
 	                uint64_t timeout_last,
 	                uint64_t packets_per_flow,
@@ -13,12 +13,29 @@ fragmentation_t::fragmentation_t(OnReassembled callback,
 		packets_per_flow_{packets_per_flow},
 		size_limit_{size_limit}
 {
-	memset(&stats, 0, sizeof(stats));
+	memset(&stats_, 0, sizeof(stats_));
+}
+
+fragmentation_t::fragmentation_t(fragmentation_t&& other)
+{
+	*this = std::move(other);
+}
+
+fragmentation_t& fragmentation_t::operator=(fragmentation_t&& other)
+{
+	std::swap(callback_, other.callback_);
+	timeout_first_ = other.timeout_first_;
+	timeout_last_ = other.timeout_last_;
+	packets_per_flow_ = other.packets_per_flow_;
+	size_limit_ = other.size_limit_;
+	stats_ = other.stats_;
+	std::swap(fragments_, other.fragments_);
+	return *this;
 }
 
 fragmentation_t::~fragmentation_t()
 {
-	for (const auto& [key, value] : fragments)
+	for (const auto& [key, value] : fragments_)
 	{
 		(void)key;
 
@@ -36,14 +53,15 @@ fragmentation_t::~fragmentation_t()
 
 common::fragmentation::stats_t fragmentation_t::getStats() const
 {
-	return stats;
+	return stats_;
 }
 
 void fragmentation_t::insert(rte_mbuf* mbuf)
 {
-	if (stats.current_count_packets > size_limit_)
+	if (stats_.current_count_packets > size_limit_)
 	{
-		stats.total_overflow_packets++;
+		YANET_LOG_DEBUG("Frag limit exceeded\n");
+		stats_.total_overflow_packets++;
 		rte_pktmbuf_free(mbuf);
 		return;
 	}
@@ -53,7 +71,7 @@ void fragmentation_t::insert(rte_mbuf* mbuf)
 	dataplane::metadata* metadata = YADECAP_METADATA(mbuf);
 	if (!(metadata->network_flags & YANET_NETWORK_FLAG_FRAGMENT))
 	{
-		stats.not_fragment_packets++;
+		stats_.not_fragment_packets++;
 		rte_pktmbuf_free(mbuf);
 		return;
 	}
@@ -72,7 +90,7 @@ void fragmentation_t::insert(rte_mbuf* mbuf)
 
 		if (range_from == range_to)
 		{
-			stats.empty_packets++;
+			stats_.empty_packets++;
 			rte_pktmbuf_free(mbuf);
 			return;
 		}
@@ -103,7 +121,7 @@ void fragmentation_t::insert(rte_mbuf* mbuf)
 
 		if (range_from == range_to)
 		{
-			stats.empty_packets++;
+			stats_.empty_packets++;
 			rte_pktmbuf_free(mbuf);
 			return;
 		}
@@ -125,14 +143,14 @@ void fragmentation_t::insert(rte_mbuf* mbuf)
 	}
 	else
 	{
-		stats.unknown_network_type_packets++;
+		stats_.unknown_network_type_packets++;
 		rte_pktmbuf_free(mbuf);
 		return;
 	}
 
-	if (!exist(fragments, key))
+	if (!exist(fragments_, key))
 	{
-		fragments[key] = {{{range_from,
+		fragments_[key] = {{{range_from,
 		                    {range_to,
 		                     mbuf}}},
 		                  currentTime,
@@ -140,18 +158,18 @@ void fragmentation_t::insert(rte_mbuf* mbuf)
 	}
 	else
 	{
-		auto& value = fragments[key];
+		auto& value = fragments_[key];
 
 		if (std::get<0>(value).size() > packets_per_flow_)
 		{
-			stats.flow_overflow_packets++;
+			stats_.flow_overflow_packets++;
 			rte_pktmbuf_free(mbuf);
 			return;
 		}
 
 		if (isIntersect(value, range_from, range_to))
 		{
-			stats.intersect_packets++;
+			stats_.intersect_packets++;
 			rte_pktmbuf_free(mbuf);
 			return;
 		}
@@ -160,14 +178,14 @@ void fragmentation_t::insert(rte_mbuf* mbuf)
 		std::get<2>(value) = currentTime;
 	}
 
-	stats.current_count_packets++;
+	stats_.current_count_packets++;
 }
 
 void fragmentation_t::handle()
 {
 	std::vector<fragmentation::key_t> gc_keys;
 
-	for (auto& [key, value] : fragments)
+	for (auto& [key, value] : fragments_)
 	{
 		if (isTimeout(value))
 		{
@@ -220,7 +238,7 @@ void fragmentation_t::handle()
 				metadata->flow.data = firstPacket_metadata->flow.data;
 
 				callback_(mbuf, metadata->flow);
-				stats.current_count_packets--;
+				stats_.current_count_packets--;
 			}
 
 			std::get<0>(value).clear();
@@ -230,20 +248,20 @@ void fragmentation_t::handle()
 
 	for (const auto& key : gc_keys)
 	{
-		for (auto& [range_from, range_value] : std::get<0>(fragments[key]))
+		for (auto& [range_from, range_value] : std::get<0>(fragments_[key]))
 		{
 			(void)range_from;
 
 			const auto& [range_to, mbuf] = range_value;
 			(void)range_to;
 
-			stats.timeout_packets++;
+			stats_.timeout_packets++;
 			rte_pktmbuf_free(mbuf);
 
-			stats.current_count_packets--;
+			stats_.current_count_packets--;
 		}
 
-		fragments.erase(key);
+		fragments_.erase(key);
 	}
 }
 

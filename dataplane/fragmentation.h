@@ -42,16 +42,20 @@ using value_t = std::tuple<std::map<uint32_t, ///< range_from
 class fragmentation_t
 {
 public:
-	using OnReassembled = std::function<void(rte_mbuf*, const common::globalBase::tFlow&)>;
-	fragmentation_t(OnReassembled callback,
+	using OnCollected = std::function<void(rte_mbuf*, const common::globalBase::tFlow&)>;
+	fragmentation_t(OnCollected callback,
 	                uint64_t timeout_first,
 	                uint64_t timeout_last,
 	                uint64_t packets_per_flow,
 	                uint64_t size_limit);
+	fragmentation_t(fragmentation_t&& other);
 	~fragmentation_t();
+
+	fragmentation_t& operator=(fragmentation_t&& other);
 
 public:
 	common::fragmentation::stats_t getStats() const;
+	OnCollected& Callback() {return callback_;}
 
 	void insert(rte_mbuf* mbuf);
 	void handle();
@@ -60,18 +64,16 @@ protected:
 	bool isTimeout(const fragmentation::value_t& value);
 	bool isCollected(const fragmentation::value_t& value);
 	bool isIntersect(const fragmentation::value_t& value, const uint32_t& range_from, const uint32_t& range_to);
-
 protected:
-	cControlPlane* controlPlane;
 
-	OnReassembled callback_;
+	OnCollected callback_;
 
 	uint64_t timeout_first_;
 	uint64_t timeout_last_;
 	uint64_t packets_per_flow_;
 	uint64_t size_limit_;
 
-	common::fragmentation::stats_t stats;
+	common::fragmentation::stats_t stats_;
 
-	std::map<fragmentation::key_t, fragmentation::value_t> fragments;
+	std::map<fragmentation::key_t, fragmentation::value_t> fragments_;
 };
