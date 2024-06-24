@@ -25,19 +25,10 @@
 
 cControlPlane::cControlPlane(cDataPlane* dataPlane) :
         dataPlane(dataPlane),
-        mempool(nullptr),
         use_kernel_interface(false),
         prevTimePointForSWRateLimiter(std::chrono::high_resolution_clock::now())
 {
 	memset(&stats, 0, sizeof(stats));
-}
-
-cControlPlane::~cControlPlane()
-{
-	if (mempool)
-	{
-		rte_mempool_free(mempool);
-	}
 }
 
 eResult cControlPlane::init(bool use_kernel_interface)
@@ -45,13 +36,6 @@ eResult cControlPlane::init(bool use_kernel_interface)
 	this->use_kernel_interface = use_kernel_interface;
 
 	eResult result = eResult::success;
-
-	/// init mempool for kernel interfaces and slow worker
-	result = initMempool();
-	if (result != eResult::success)
-	{
-		return result;
-	}
 
 	icmpOutRemainder = dataPlane->config.SWICMPOutRateLimit / dataPlane->config.rateLimitDivisor;
 
@@ -1349,85 +1333,6 @@ void cControlPlane::waitAllWorkers()
 	YADECAP_MEMORY_BARRIER_COMPILE;
 }
 
-eResult cControlPlane::initMempool()
-{
-	mempool = rte_mempool_create("cp",
-	                             CONFIG_YADECAP_MBUFS_COUNT + dataPlane->getConfigValues().fragmentation_size + dataPlane->getConfigValues().master_mempool_size + 4 * CONFIG_YADECAP_PORTS_SIZE * CONFIG_YADECAP_MBUFS_BURST_SIZE + 4 * dataPlane->ports.size() * dataPlane->getConfigValues().kernel_interface_queue_size,
-	                             CONFIG_YADECAP_MBUF_SIZE,
-	                             0,
-	                             sizeof(struct rte_pktmbuf_pool_private),
-	                             rte_pktmbuf_pool_init,
-	                             nullptr,
-	                             rte_pktmbuf_init,
-	                             nullptr,
-	                             rte_socket_id(),
-	                             0); ///< multi-producers, multi-consumers
-	if (!mempool)
-	{
-		YADECAP_LOG_ERROR("rte_mempool_create(): %s [%u]\n", rte_strerror(rte_errno), rte_errno);
-		return eResult::errorInitMempool;
-	}
-
-	return eResult::success;
-}
-
-bool cControlPlane::KNIAddTxQueue(tQueueId queue, tSocketId socket)
-{
-	for (auto& bundle : kni_handles)
-	{
-		auto& [fwd, in, out, drop] = bundle.second;
-		if (!fwd.SetupTxQueue(queue, socket) ||
-		    !in.SetupTxQueue(queue, socket) ||
-		    !out.SetupTxQueue(queue, socket) ||
-		    !drop.SetupTxQueue(queue, socket))
-		{
-			return false;
-		}
-	}
-	return true;
-}
-bool cControlPlane::KNIAddRxQueue(tQueueId queue, tSocketId socket, rte_mempool* mempool)
-{
-	for (auto& bundle : kni_handles)
-	{
-		auto& [fwd, in, out, drop] = bundle.second;
-		if (!fwd.SetupRxQueue(queue, socket, mempool) ||
-		    !in.SetupRxQueue(queue, socket, mempool) ||
-		    !out.SetupRxQueue(queue, socket, mempool) ||
-		    !drop.SetupRxQueue(queue, socket, mempool))
-		{
-			return false;
-		}
-	}
-	return true;
-}
-
-eResult cControlPlane::setup_kernel_interfaces_queues()
-{
-	if (!KNIAddTxQueue(0, rte_lcore_to_socket_id(dataPlane->config.controlPlaneCoreId)))
-	{
-		return eResult::errorInitQueue;
-	}
-	if (!KNIAddRxQueue(0, rte_lcore_to_socket_id(dataPlane->config.controlPlaneCoreId), mempool))
-	{
-		return eResult::errorInitQueue;
-	}
-
-	return eResult::success;
-}
-
-bool cControlPlane::set_kernel_interfaces_up()
-{
-	for (const auto& bundle : kni_handles)
-	{
-		if (!bundle.second.forward.SetUp())
-		{
-			return false;
-		}
-	}
-	return true;
-}
-
 void cControlPlane::flush_kernel_interface(KniPortData& port_data, sKniStats& stats)
 {
 
@@ -1465,22 +1370,6 @@ void cControlPlane::flush_kernel_interface(KniPortData& port_data)
 	rte_pktmbuf_free_bulk(&port_data.mbufs[txSize], port_data.mbufs_count - txSize);
 
 	port_data.mbufs_count = 0;
-}
-
-void cControlPlane::sendPacketToSlowWorker(rte_mbuf* mbuf,
-                                           const common::globalBase::tFlow& flow)
-{
-	/// we dont support attached mbufs
-
-	if (slowWorkerMbufs.size() >= 1024) ///< @todo: variable
-	{
-		stats.slowworker_drops++;
-		rte_pktmbuf_free(mbuf);
-		return;
-	}
-
-	stats.slowworker_packets++;
-	slowWorkerMbufs.emplace(mbuf, flow);
 }
 
 void cControlPlane::SWRateLimiterTimeTracker()

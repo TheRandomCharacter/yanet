@@ -38,7 +38,7 @@ protected:
 
 public:
 	cControlPlane(cDataPlane* dataPlane);
-	virtual ~cControlPlane();
+	virtual ~cControlPlane() = default;
 
 	eResult init(bool use_kernel_interface);
 	void stop();
@@ -92,21 +92,7 @@ public:
 	void switchGlobalBase();
 	virtual void waitAllWorkers();
 
-	void sendPacketToSlowWorker(rte_mbuf* mbuf, const common::globalBase::tFlow& flow); ///< @todo: remove flow
-
 protected:
-	eResult initMempool();
-	eResult init_kernel_interfaces();
-	eResult setup_interface_queues(tPortId port, tQueueId queue, tSocketId socket, rte_mempool* mempool);
-	bool KNIAddTxQueue(tQueueId queue, tSocketId socket);
-	bool KNIAddRxQueue(tQueueId queue, tSocketId socket, rte_mempool* mempool);
-	eResult setup_kernel_interfaces_queues();
-	bool set_kernel_interfaces_up();
-
-public:
-protected:
-	void mainThread();
-
 	void SWRateLimiterTimeTracker();
 
 protected:
@@ -120,7 +106,6 @@ protected:
 	std::mutex mutex;
 	std::mutex balancer_mutex;
 
-	rte_mempool* mempool;
 	bool use_kernel_interface;
 
 	struct KniHandleBundle
