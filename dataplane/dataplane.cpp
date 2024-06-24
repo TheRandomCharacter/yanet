@@ -1009,6 +1009,13 @@ eResult cDataPlane::initWorkers()
 		++m_out_queues;
 	}
 
+	worker_gc_t::PortToSocketArray port_to_socket;
+	for (const auto& [port_id, port] : ports)
+	{
+		(void)port;
+		port_to_socket[port_id] = rte_eth_dev_socket_id(port_id);
+	}
+
 	/// worker_gc
 	for (const auto& core_id : config.workerGCs)
 	{
@@ -1016,9 +1023,20 @@ eResult cDataPlane::initWorkers()
 
 		YADECAP_LOG_INFO("initWorker. coreId: %u [worker_gc]\n", core_id);
 
+		worker_gc_t::SamplersVector samplers;
+		for (cWorker* worker : workers_vector)
+		{
+			if (worker->socketId != socket_id)
+				continue;
+
+			samplers.push_back(&worker->sampler);
+		}
+
 		auto* worker = memory_manager.create_static<worker_gc_t>("worker_gc",
 		                                                         socket_id,
-		                                                         this);
+		                                                         configValues,
+		                                                         port_to_socket,
+		                                                         std::move(samplers));
 		if (!worker)
 		{
 			return eResult::errorAllocatingMemory;
@@ -1179,10 +1197,27 @@ eResult cDataPlane::InitSlowWorker(const tCoreId core, const CPlaneWorkerConfig&
 		gcs_to_service.push_back(worker_gcs.at(core));
 	}
 
+	std::vector<dpdk::RingConn<rte_mbuf*>> rings_from_gcs;
+	for (auto& gccore : cfg.gcs)
+	{
+		auto r = worker_gcs.at(gccore)->RegisterSlowWorker("cw" + core,
+		                                                   configValues.ring_normalPriority_size,
+		                                                   configValues.ring_toFreePackets_size,
+														   &(worker->sampler));
+		if (r)
+		{
+			rings_from_gcs.push_back(r.value());
+		}
+		else
+		{
+			abort();
+		}
+	}
+
 	auto slow = new dataplane::SlowWorker(worker,
 	                                      ports_to_service,
 	                                      workers_to_service,
-	                                      gcs_to_service,
+	                                      std::move(rings_from_gcs),
 	                                      kni_config,
 	                                      socket_cplane_mempools.at(socket_id),
 	                                      RunBarrier(),
@@ -1409,8 +1444,8 @@ void cDataPlane::start()
 		{
 			YANET_LOG_ERROR("Multiple workloads assigned to core %d\n", core);
 		}
-		coreFunctions_.emplace(core, [garbage_collector]() {
-			garbage_collector->start();
+		coreFunctions_.emplace(core, [garbage_collector, barrier = RunBarrier()]() {
+			garbage_collector->start(barrier);
 		});
 	}
 
@@ -2143,7 +2178,7 @@ std::optional<std::pair<tCoreId, CPlaneWorkerConfig>> cDataPlane::parseControlPl
 	}
 
 	std::set<tCoreId> gc_cores;
-	for (auto gc_core:config.workerGCs)
+	for (auto gc_core : config.workerGCs)
 	{
 		if (rte_lcore_to_socket_id(gc_core) == rte_lcore_to_socket_id(core))
 		{
@@ -2151,12 +2186,11 @@ std::optional<std::pair<tCoreId, CPlaneWorkerConfig>> cDataPlane::parseControlPl
 		}
 	}
 
-
 	return std::optional{std::pair<tCoreId, CPlaneWorkerConfig>{
 	        core,
 	        CPlaneWorkerConfig{std::move(worker_ports),
 	                           std::move(worker_cores),
-							   std::move(gc_cores)}}};
+	                           std::move(gc_cores)}}};
 }
 
 eResult cDataPlane::parseConfigValues(const nlohmann::json& json)
