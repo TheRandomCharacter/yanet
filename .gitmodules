@@ -10,3 +10,6 @@
 [submodule "subprojects/ankerl"]
 	path = subprojects/ankerl
 	url = https://github.com/martinus/unordered_dense
+[submodule "subprojects/chash"]
+	path = subprojects/chash
+	url = https://github.com/yanet-platform/chash.git
