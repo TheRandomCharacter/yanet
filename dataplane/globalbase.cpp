@@ -1741,8 +1741,28 @@ balancer_real_id_t* generation::rebuild_service_ring_one_chash(
 		std::abort();
 	}
 	updater.value().InitLookup(start);
+	//updater.value().Adjust(start);
+
+	chash_updaters.erase(&service);
 	chash_updaters.emplace(&service, std::move(updater.value()));
-	return start + updater.value().LookupSize();
+
+	balancer_real_id_t* end = start + chash_updaters.at(&service).LookupSize();
+
+	std::unordered_map<uint32_t, uint32_t> diff;
+	for (balancer_real_id_t* cell; cell != end; ++cell)
+	{
+		++diff[*cell];
+	}
+
+	std::stringstream ss{"\n"};
+	for (auto& [key, value] : diff)
+	{
+		ss << "Id " << key << ": " << value << "cells\n";
+	}
+
+	YANET_LOG_ERROR("PDR: Service ring %n updated: %s", start, ss.str().c_str());
+
+	return end;
 }
 
 balancer_real_id_t* generation::update_service_ring_one_chash(
@@ -1772,7 +1792,25 @@ balancer_real_id_t* generation::update_service_ring_one_chash(
 	        service.real_size,
 	        start);
 
-	return start + updater.LookupSize();
+	//updater.Adjust(&balancer_service_reals[service.real_start]);
+
+	balancer_real_id_t* end = start + updater.LookupSize();
+
+	std::unordered_map<uint32_t, uint32_t> diff;
+	for (balancer_real_id_t* cell; cell != end; ++cell)
+	{
+		++diff[*cell];
+	}
+
+	std::stringstream ss{"\n"};
+	for (auto& [key, value] : diff)
+	{
+		ss << "Id " << key << ": " << value << "cells\n";
+	}
+
+	YANET_LOG_ERROR("PDR: Service ring %n updated: %s", start, ss.str().c_str());
+
+	return end;
 }
 
 balancer_real_id_t* generation::evaluate_service_ring_one(
