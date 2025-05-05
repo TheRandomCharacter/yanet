@@ -1765,7 +1765,7 @@ balancer_real_id_t* generation::rebuild_service_ring_one_chash(
 
 	balancer_real_id_t* end = start + updater.value().LookupSize();
 
-	InspectLookup("Rerbuild", start, updater.value().LookupSize());
+	InspectLookup("Rebuild", start, updater.value().LookupSize());
 	chash_updaters.erase(&service);
 	chash_updaters.emplace(&service, std::move(updater.value()));
 
