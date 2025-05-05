@@ -1734,33 +1734,19 @@ balancer_real_id_t* generation::rebuild_service_ring_one_chash(
 	        service.real_size,
 	        YANET_DEFAULT_BALANCER_REAL_MAPPINGS_LIMIT,
 	        YANET_DEFAULT_BALANCER_CELLS_PER_WEIGHT_UNIT,
-	        chash::WeightUpdater::LookupRequiredSize(reals.size(), YANET_DEFAULT_BALANCER_CELLS_PER_WEIGHT_UNIT));
+	        rsize);
 	if (!updater)
 	{
 		YANET_THROW("Failed to intialize updater for balancer service reals");
 		std::abort();
 	}
 	updater.value().InitLookup(start);
-	//updater.value().Adjust(start);
+	updater.value().Adjust(start);
+
+	balancer_real_id_t* end = start + updater.value().LookupSize();
 
 	chash_updaters.erase(&service);
 	chash_updaters.emplace(&service, std::move(updater.value()));
-
-	balancer_real_id_t* end = start + chash_updaters.at(&service).LookupSize();
-
-	std::unordered_map<uint32_t, uint32_t> diff;
-	for (balancer_real_id_t* cell; cell != end; ++cell)
-	{
-		++diff[*cell];
-	}
-
-	std::stringstream ss{"\n"};
-	for (auto& [key, value] : diff)
-	{
-		ss << "Id " << key << ": " << value << "cells\n";
-	}
-
-	YANET_LOG_ERROR("PDR: Service ring %n updated: %s", start, ss.str().c_str());
 
 	return end;
 }
@@ -1792,23 +1778,9 @@ balancer_real_id_t* generation::update_service_ring_one_chash(
 	        service.real_size,
 	        start);
 
-	//updater.Adjust(&balancer_service_reals[service.real_start]);
+	updater.Adjust(&balancer_service_reals[service.real_start]);
 
 	balancer_real_id_t* end = start + updater.LookupSize();
-
-	std::unordered_map<uint32_t, uint32_t> diff;
-	for (balancer_real_id_t* cell; cell != end; ++cell)
-	{
-		++diff[*cell];
-	}
-
-	std::stringstream ss{"\n"};
-	for (auto& [key, value] : diff)
-	{
-		ss << "Id " << key << ": " << value << "cells\n";
-	}
-
-	YANET_LOG_ERROR("PDR: Service ring %n updated: %s", start, ss.str().c_str());
 
 	return end;
 }
@@ -1852,7 +1824,7 @@ void generation::evaluate_service_ring(ServiceRingOp op)
 	balancer_real_id_t* service_start = ring->reals;
 	for (uint32_t service_idx = 0;
 	     service_idx < balancer_services_count;
-	     ++service_idx, service_start += YANET_CONFIG_BALANCER_REAL_WEIGHT_MAX)
+	     ++service_idx, service_start += YANET_CONFIG_BALANCER_SERVICE_SIZE)
 	{
 		const balancer_service_t& service = balancer_services[balancer_active_services[service_idx]];
 
@@ -1862,7 +1834,7 @@ void generation::evaluate_service_ring(ServiceRingOp op)
 		auto service_end = evaluate_service_ring_one(
 		        op,
 		        service_start,
-		        service_start + YANET_CONFIG_BALANCER_REAL_WEIGHT_MAX,
+		        service_start + YANET_CONFIG_BALANCER_SERVICE_SIZE,
 		        service);
 		range.size = std::distance(service_start, service_end);
 	}
