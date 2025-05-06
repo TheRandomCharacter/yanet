@@ -1746,14 +1746,19 @@ balancer_real_id_t* generation::rebuild_service_ring_one_chash(
 		weights.push_back(balancer_real_states[real_id].weight);
 	}
 	auto rsize = chash::WeightUpdater::LookupRequiredSize(
-	        service.real_size, YANET_DEFAULT_BALANCER_CELLS_PER_WEIGHT_UNIT);
+	        service.real_size, YANET_CONFIG_BALANCER_CELLS_PER_WEIGHT_UNIT);
+	if (start + rsize > do_not_exceed)
+	{
+		YANET_THROW("Insufficient space for balancer service");
+		std::abort();
+	}
 	auto updater = chash::WeightUpdater::MakeWeightUpdater(
 	        reals.data(),
 	        &balancer_service_reals[service.real_start],
 	        weights.data(),
 	        service.real_size,
 	        YANET_DEFAULT_BALANCER_REAL_MAPPINGS_LIMIT,
-	        YANET_DEFAULT_BALANCER_CELLS_PER_WEIGHT_UNIT,
+	        YANET_CONFIG_BALANCER_CELLS_PER_WEIGHT_UNIT,
 	        rsize);
 	if (!updater)
 	{
@@ -1847,9 +1852,10 @@ void generation::evaluate_service_ring(ServiceRingOp op)
 {
 	balancer_service_ring_t* ring = &balancer_service_ring;
 	balancer_real_id_t* service_start = ring->reals;
+	balancer_real_id_t* ring_end = ring->reals + YANET_CONFIG_BALANCER_WEIGHTS_SIZE;
 	for (uint32_t service_idx = 0;
 	     service_idx < balancer_services_count;
-	     ++service_idx, service_start += YANET_CONFIG_BALANCER_SERVICE_SIZE)
+	     ++service_idx)
 	{
 		const balancer_service_t& service = balancer_services[balancer_active_services[service_idx]];
 
@@ -1859,9 +1865,10 @@ void generation::evaluate_service_ring(ServiceRingOp op)
 		auto service_end = evaluate_service_ring_one(
 		        op,
 		        service_start,
-		        service_start + YANET_CONFIG_BALANCER_SERVICE_SIZE,
+		        ring_end,
 		        service);
 		range.size = std::distance(service_start, service_end);
+		service_start = service_end;
 	}
 }
 
