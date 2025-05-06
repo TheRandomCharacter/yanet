@@ -139,6 +139,10 @@ protected:
 	void RealFind(google::protobuf::RpcController* controller, const common::icp_proto::BalancerRealFindRequest* request, common::icp_proto::BalancerRealFindResponse* response, google::protobuf::Closure* done) override;
 	void Real(google::protobuf::RpcController* controller, const ::common::icp_proto::BalancerRealRequest* request, ::common::icp_proto::Empty* response, ::google::protobuf::Closure* done) override;
 	void RealFlush(google::protobuf::RpcController* controller, const ::common::icp_proto::Empty* request, ::common::icp_proto::Empty* response, ::google::protobuf::Closure* done) override;
+	void InspectLookup(google::protobuf::RpcController* controller,
+	                   const ::common::icp_proto::BalancerInspectServiceRequest* request,
+	                   ::common::icp_proto::BalancerInspectServiceResponse* response,
+	                   ::google::protobuf::Closure* done) override;
 
 private:
 	bool reconfigure_wlc();

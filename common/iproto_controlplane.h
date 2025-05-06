@@ -51,6 +51,18 @@ public:
 		}
 	}
 
+	auto balancer_inspect_lookup(const common::icp_proto::BalancerInspectServiceRequest& request)
+	{
+		common::proto::RpcController ctl;
+		common::icp_proto::BalancerInspectServiceResponse response;
+		stub.InspectLookup(&ctl, &request, &response, nullptr);
+		if (ctl.Failed())
+		{
+			throw std::string("rpc error: " + ctl.ErrorText());
+		}
+	}
+
+
 protected:
 	common::icp_proto::BalancerService::Stub stub;
 };

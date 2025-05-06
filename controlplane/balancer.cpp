@@ -181,6 +181,15 @@ void balancer_t::RealFlush(
 	balancer_real_flush();
 }
 
+void balancer_t::InspectLookup(
+        google::protobuf::RpcController* controller,
+        const ::common::icp_proto::BalancerInspectServiceRequest* request,
+        ::common::icp_proto::BalancerInspectServiceResponse* response,
+        ::google::protobuf::Closure*)
+{
+	YANET_LOG_ERROR("InspectLookup remote called.\n");
+}
+
 void balancer_t::limit(common::icp::limit_summary::response& limits) const
 {
 	{

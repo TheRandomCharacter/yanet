@@ -135,6 +135,53 @@ inline common::ip_address_t convert_to_ip_address(const common::icp_proto::IPAdd
 	}
 }
 
+void lookup_inspect(std::string module_string,
+                    std::optional<common::ip_address_t> virtual_ip,
+                    std::optional<std::string> proto_string,
+                    std::optional<std::string> virtual_port_string)
+{
+	// common::icp_proto::BalancerRealFindRequest request;
+	// if (module_string != "" &&
+	//     module_string != "any")
+	// {
+	// 	request.set_module(module_string.data());
+	// }
+
+	// if (virtual_ip)
+	// {
+	// 	setip(request.mutable_virtual_ip(), virtual_ip.value());
+	// }
+
+	// if (virtual_port_string)
+	// {
+	// 	request.set_virtual_port(std::stoull(*virtual_port_string, nullptr, 0));
+	// }
+
+	// if (proto_string)
+	// {
+	// 	if (proto_string == "tcp")
+	// 	{
+	// 		request.set_proto(::common::icp_proto::NetProto::tcp);
+	// 	}
+	// 	else if (proto_string == "udp")
+	// 	{
+	// 		request.set_proto(::common::icp_proto::NetProto::udp);
+	// 	}
+	// 	else
+	// 	{
+	// 		YANET_LOG_WARNING("undefined net protocol requested: %s", proto_string->c_str());
+	// 	}
+	// }
+
+	// if (real_port_string)
+	// {
+	// 	request.set_real_port(std::stoull(*real_port_string, nullptr, 0));
+	// }
+	common::icp_proto::BalancerInspectServiceRequest request;
+	interface::protoControlPlane controlPlane;
+	controlPlane.balancer_inspect_lookup(request);
+}
+
 void real_find(std::string module_string,
                std::optional<common::ip_address_t> virtual_ip,
                std::optional<std::string> proto_string,
