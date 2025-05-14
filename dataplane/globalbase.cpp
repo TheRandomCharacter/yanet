@@ -1709,24 +1709,6 @@ balancer_real_id_t* generation::rebuild_service_ring_one_wrr(
 	return end;
 }
 
-namespace
-{
-
-void InspectLookup(const char* s, balancer_real_id_t* lookup, std::size_t sz)
-{
-}
-
-void InspectWeights(const char* s,
-                    balancer_real_id_t* ids,
-                    std::uint32_t* weights,
-                    std::size_t cnt)
-{
-	std::stringstream ss;
-	YANET_LOG_ERROR("InspectWeights: %s: %s", s, ss.str().c_str());
-}
-
-}
-
 balancer_real_id_t* generation::rebuild_service_ring_one_chash(
         balancer_real_id_t* start,
         const balancer_real_id_t* const do_not_exceed,
@@ -1770,7 +1752,6 @@ balancer_real_id_t* generation::rebuild_service_ring_one_chash(
 
 	balancer_real_id_t* end = start + updater.value().LookupSize();
 
-	InspectLookup("Rebuild", start, updater.value().LookupSize());
 	chash_updaters.erase(&service);
 	chash_updaters.emplace(&service, std::move(updater.value()));
 
@@ -1798,10 +1779,6 @@ balancer_real_id_t* generation::update_service_ring_one_chash(
 		balancer_real_id_t real_id = balancer_service_reals[real_idx];
 		weights.push_back(balancer_real_states[real_id].weight);
 	}
-	InspectWeights("Update",
-	               &balancer_service_reals[service.real_start],
-	               weights.data(),
-	               service.real_size);
 	updater.UpdateLookup(
 	        &balancer_service_reals[service.real_start],
 	        weights.data(),

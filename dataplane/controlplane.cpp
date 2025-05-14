@@ -975,6 +975,44 @@ common::idp::balancer_service_connections::response cControlPlane::balancer_serv
 	return response;
 }
 
+namespace
+{
+std::unordered_map<balancer_real_id_t, std::uint32_t> get_cell_distribution(balancer_real_id_t* start, uint32_t size)
+{
+	std::unordered_map<balancer_real_id_t, std::uint32_t> dist;
+	for (auto cell = start, end = cell + size; cell != end; ++cell)
+	{
+		++dist[*cell];
+	}
+	return dist;
+}
+}
+
+common::idp::BalancerInspectLookup::response cControlPlane::balancer_inspect_lookup(const common::idp::BalancerInspectLookup::request& request)
+{
+	common::idp::BalancerInspectLookup::response response;
+	const auto& base = dataPlane->globalBases.begin()->second[dataPlane->currentGlobalBaseId];
+	const auto& service = base->balancer_services[request.service_id];
+
+	auto dist = get_cell_distribution(base->balancer_service_ring.reals + base->balancer_service_ring.ranges[request.service_id].start,
+	                                  base->balancer_service_ring.ranges[request.service_id].size);
+
+	for (auto real_id = base->balancer_service_reals + service.real_start,
+	          end = real_id + service.real_size;
+	     real_id != end;
+	     ++real_id)
+	{
+		common::idp::BalancerInspectLookup::Real entry {
+			common::ipv6_address_t{base->balancer_reals[*real_id].destination.bytes},
+			base->balancer_real_states[*real_id].weight,
+			dist[*real_id]
+		};
+		response.emplace_back(std::move(entry));
+	}
+
+	return response;
+}
+
 common::idp::balancer_real_connections::response cControlPlane::balancer_real_connections()
 {
 	common::idp::balancer_real_connections::response response;

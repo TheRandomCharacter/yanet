@@ -93,22 +93,15 @@ message BalancerRealRequest {
   repeated Real reals = 1;
 }
 
-message BalancerInspectServiceRequest {
+message BalancerInspectLookupRequest {
   string module = 1;
   IPAddr virtual_ip = 2;
-  NetProto proto = 3;
-  oneof virtual_port_opt {
-     uint32 virtual_port = 4;
-  }
 }
 
-message BalancerInspectServiceResponse {
+message BalancerInspectLookupResponse {
   message Real {
-    IPAddr real_ip = 1;
-    oneof virtual_port_opt {
-       uint32 virtual_port = 2;
-    }
-    uint32 adm_weight = 3;
+    IPAddr ip = 1;
+    uint32 weight = 3;
     uint32 cells = 4;
   }
   repeated Real reals = 1;
@@ -120,5 +113,5 @@ service BalancerService {
   rpc RealFind(BalancerRealFindRequest) returns (BalancerRealFindResponse);
   rpc Real(BalancerRealRequest) returns (Empty);
   rpc RealFlush(Empty) returns (Empty);
-  rpc InspectLookup(BalancerInspectServiceRequest) returns (BalancerInspectServiceResponse);
+  rpc InspectLookup(BalancerInspectLookupRequest) returns (BalancerInspectLookupResponse);
 }

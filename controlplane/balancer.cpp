@@ -183,11 +183,61 @@ void balancer_t::RealFlush(
 
 void balancer_t::InspectLookup(
         google::protobuf::RpcController* controller,
-        const ::common::icp_proto::BalancerInspectServiceRequest* request,
-        ::common::icp_proto::BalancerInspectServiceResponse* response,
-        ::google::protobuf::Closure*)
+        const ::common::icp_proto::BalancerInspectLookupRequest* request,
+        ::common::icp_proto::BalancerInspectLookupResponse* response,
+        ::google::protobuf::Closure* done)
 {
-	YANET_LOG_ERROR("InspectLookup remote called.\n");
+	std::lock_guard<std::mutex> guard(config_switch_mutex);
+
+	std::stringstream ss;
+	ss << (request->module().empty() ? "nil" : request->module()) << ' '
+	   << (request->has_virtual_ip() ? std::string{convert_to_ip_address(request->virtual_ip())} : "nil");
+	YANET_LOG_ERROR("PDR: CP: request: %s\n", ss.str().c_str());
+
+	auto gs_lock = generations_services.current_lock_guard();
+	const auto& cfg = generations_config.current();
+	for (auto& [module_name, balancer] : cfg.config_balancers)
+	{
+		if (!request->module().empty() && request->module() != module_name)
+		{
+			continue;
+		}
+
+		for (const auto& [service_id,
+		                  virtual_ip,
+		                  proto,
+		                  virtual_port,
+		                  version,
+		                  scheduler,
+		                  scheduler_params,
+		                  forwarding_method,
+		                  flags,
+		                  ipv4_outer_source_network,
+		                  ipv6_outer_source_network,
+		                  reals] : balancer.services)
+		{
+			if (service_id >= YANET_CONFIG_BALANCER_SERVICES_SIZE)
+			{
+				YANET_LOG_ERROR("Invalid balancer service id encountered. %d\n", service_id);
+				continue;
+			}
+
+			if (request->has_virtual_ip() && virtual_ip != convert_to_ip_address(request->virtual_ip()))
+			{
+				continue;
+			}
+
+			common::idp::BalancerInspectLookup::request idp_request{service_id};
+			const auto idp_response = dataplane.balancer_inspect_lookup(idp_request);
+			for (auto [ip, weight, cells] : idp_response)
+			{
+				auto real = response->add_reals();
+				setip(real->mutable_ip(), ip);
+				real->set_weight(weight);
+				real->set_cells(cells);
+			}
+		}
+	}
 }
 
 void balancer_t::limit(common::icp::limit_summary::response& limits) const

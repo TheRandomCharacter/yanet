@@ -57,6 +57,7 @@ enum class requestType : uint32_t
 	lpm6LookupAddress,
 	nat64stateful_state,
 	balancer_connection,
+	balancerInspectLookup,
 	balancer_service_connections,
 	balancer_real_connections,
 	limits,
@@ -584,6 +585,23 @@ using request = std::vector<std::tuple<requestType,
 using response = eResult;
 }
 
+namespace BalancerInspectLookup
+{
+struct request
+{
+	std::uint32_t service_id;
+};
+
+struct Real
+{
+	ipv6_address_t ip;
+	uint32_t weight;
+	uint32_t cells;
+};
+
+using response = std::vector<Real>;
+} // namespace BalancerInspectLookup
+
 namespace getGlobalBase ///< @todo: delete
 {
 /// @todo: move
@@ -1004,6 +1022,7 @@ using request = std::tuple<requestType,
                                         lpm6LookupAddress::request,
                                         nat64stateful_state::request,
                                         balancer_connection::request,
+                                        BalancerInspectLookup::request,
                                         debug_latch_update::request,
                                         unrdup_vip_to_balancers::request,
                                         update_vip_vport_proto::request,
@@ -1035,6 +1054,7 @@ using response = std::variant<std::tuple<>,
                               balancer_connection::response,
                               balancer_service_connections::response,
                               balancer_real_connections::response,
+                              BalancerInspectLookup::response,
                               version::response,
                               limits::response,
                               samples::response,
