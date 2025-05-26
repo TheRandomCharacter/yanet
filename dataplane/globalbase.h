@@ -198,24 +198,35 @@ protected:
 	enum class ServiceRingOp
 	{
 		Update,
+		Relocate,
 		Rebuild
 	};
 
 	using RealWeight = std::pair<balancer_real_id_t, decltype(balancer_real_state_t::weight)>;
 
-	balancer_real_id_t* rebuild_service_ring_one_wrr(
+	struct ServiceSize
+	{
+		balancer_real_id_t* end;
+		balancer_real_id_t* reserved;
+	};
+
+	ServiceSize rebuild_service_ring_one_wrr(
 	        balancer_real_id_t* start,
 	        const balancer_real_id_t* const do_not_exceed,
 	        const balancer_service_t& service);
-	balancer_real_id_t* rebuild_service_ring_one_chash(
+	ServiceSize rebuild_service_ring_one_chash(
 	        balancer_real_id_t* start,
 	        const balancer_real_id_t* const do_not_exceed,
 	        const balancer_service_t& service);
-	balancer_real_id_t* update_service_ring_one_chash(
+	ServiceSize init_service_ring_one_chash(
 	        balancer_real_id_t* start,
 	        const balancer_real_id_t* const do_not_exceed,
 	        const balancer_service_t& service);
-	balancer_real_id_t* evaluate_service_ring_one(
+	ServiceSize update_service_ring_one_chash(
+	        balancer_real_id_t* start,
+	        const balancer_real_id_t* const do_not_exceed,
+	        const balancer_service_t& service);
+	ServiceSize evaluate_service_ring_one(
 	        ServiceRingOp op,
 	        balancer_real_id_t* start,
 	        const balancer_real_id_t* const do_not_exceed,

@@ -1680,13 +1680,14 @@ inline uint64_t generation::count_real_connections(uint32_t counter_id)
 	return (sessions_created - sessions_destroyed + sessions_created_gc - sessions_destroyed_gc) / dataPlane->numaNodesInUse;
 }
 
-balancer_real_id_t* generation::rebuild_service_ring_one_wrr(
+generation::ServiceSize generation::rebuild_service_ring_one_wrr(
         balancer_real_id_t* start,
         const balancer_real_id_t* const do_not_exceed,
         const balancer_service_t& service)
 {
 	utils::Deferer defer([]() { YADECAP_MEMORY_BARRIER_COMPILE; });
 	balancer_real_id_t* end = start;
+	balancer_real_id_t* reserve = start + YANET_BALANCER_WRR_SERVICE_SIZE;
 	for (uint32_t real_idx = service.real_start;
 	     real_idx < service.real_start + service.real_size;
 	     ++real_idx)
@@ -1696,20 +1697,20 @@ balancer_real_id_t* generation::rebuild_service_ring_one_wrr(
 
 		const auto& weight = state.weight;
 
-		if (end + weight > do_not_exceed)
+		if (end + weight > reserve)
 		{
-			YANET_LOG_ERROR("Balancer service exceeded ring chunk bounds\n");
-			return end;
+			YANET_LOG_ERROR("Balancer service exceeded ring chunk bounds. Some reals skipped.\n");
+			break;
 		}
 
 		std::fill_n(end, weight, real_id);
 		end += weight;
 	}
 
-	return end;
+	return {end, reserve};
 }
 
-balancer_real_id_t* generation::rebuild_service_ring_one_chash(
+generation::ServiceSize generation::rebuild_service_ring_one_chash(
         balancer_real_id_t* start,
         const balancer_real_id_t* const do_not_exceed,
         const balancer_service_t& service)
@@ -1719,8 +1720,8 @@ balancer_real_id_t* generation::rebuild_service_ring_one_chash(
 	std::vector<std::uint32_t> weights;
 	reals.reserve(service.real_size);
 	weights.reserve(service.real_size);
-	for (uint32_t real_idx = service.real_start;
-	     real_idx < service.real_start + service.real_size;
+	for (uint32_t real_idx = service.real_start, real_end = real_idx + service.real_size;
+	     real_idx != real_end;
 	     ++real_idx)
 	{
 		balancer_real_id_t real_id = balancer_service_reals[real_idx];
@@ -1755,10 +1756,10 @@ balancer_real_id_t* generation::rebuild_service_ring_one_chash(
 	chash_updaters.erase(&service);
 	chash_updaters.emplace(&service, std::move(updater.value()));
 
-	return end;
+	return {end, end};
 }
 
-balancer_real_id_t* generation::update_service_ring_one_chash(
+generation::ServiceSize generation::init_service_ring_one_chash(
         balancer_real_id_t* start,
         const balancer_real_id_t* const do_not_exceed,
         const balancer_service_t& service)
@@ -1767,7 +1768,7 @@ balancer_real_id_t* generation::update_service_ring_one_chash(
 	if (up == chash_updaters.end())
 	{
 		YANET_LOG_ERROR("No state information for updating requested service.\n");
-		return start;
+		return {start, start};
 	}
 	auto& updater = up->second;
 	std::vector<std::uint32_t> weights;
@@ -1779,50 +1780,91 @@ balancer_real_id_t* generation::update_service_ring_one_chash(
 		balancer_real_id_t real_id = balancer_service_reals[real_idx];
 		weights.push_back(balancer_real_states[real_id].weight);
 	}
+	updater.SetWeights(&balancer_service_reals[service.real_start], weights.data(), service.real_size);
+
+	auto rsize = updater.LookupSize();
+	if (start + rsize > do_not_exceed)
+	{
+		YANET_THROW("Insufficient space for balancer service");
+		std::abort();
+	}
+
+	updater.InitLookup(start);
+	updater.Adjust(start);
+
+	balancer_real_id_t* end = start + updater.LookupSize();
+	return {end, end};
+}
+
+generation::ServiceSize generation::update_service_ring_one_chash(
+        balancer_real_id_t* start,
+        const balancer_real_id_t* const do_not_exceed,
+        const balancer_service_t& service)
+{
+	auto up = chash_updaters.find(&service);
+	if (up == chash_updaters.end())
+	{
+		YANET_LOG_ERROR("No state information for updating requested service.\n");
+		return {start, start};
+	}
+	auto& updater = up->second;
+	std::vector<std::uint32_t> weights;
+	weights.reserve(service.real_size);
+	for (uint32_t real_idx = service.real_start,
+	              end = real_idx + service.real_size;
+	     real_idx < end;
+	     ++real_idx)
+	{
+		balancer_real_id_t real_id = balancer_service_reals[real_idx];
+		weights.push_back(balancer_real_states[real_id].weight);
+	}
+
 	updater.UpdateLookup(
 	        &balancer_service_reals[service.real_start],
 	        weights.data(),
 	        service.real_size,
 	        start);
 
-	updater.Adjust(&balancer_service_reals[service.real_start]);
+	updater.Adjust(start);
 
 	balancer_real_id_t* end = start + updater.LookupSize();
 
-	return end;
+	return {end, end};
 }
 
-balancer_real_id_t* generation::evaluate_service_ring_one(
+generation::ServiceSize generation::evaluate_service_ring_one(
         ServiceRingOp op,
         balancer_real_id_t* start,
         const balancer_real_id_t* const do_not_exceed,
         const balancer_service_t& service)
 {
-	balancer_real_id_t* end{start};
 	using scheduler = ::balancer::scheduler;
 	switch (service.scheduler)
 	{
 		case scheduler::rr:
 		case scheduler::wrr:
-			end = rebuild_service_ring_one_wrr(
+			return rebuild_service_ring_one_wrr(
 			        start, do_not_exceed, service);
-			break;
 		case scheduler::wlc:
 		case scheduler::chash:
-			if (op == ServiceRingOp::Rebuild)
+			switch (op)
 			{
-				end = rebuild_service_ring_one_chash(
-				        start, do_not_exceed, service);
-			}
-			else
-			{
-				end = update_service_ring_one_chash(start, do_not_exceed, service);
+				case ServiceRingOp::Update:
+					return update_service_ring_one_chash(start, do_not_exceed, service);
+				case ServiceRingOp::Relocate:
+					return init_service_ring_one_chash(start, do_not_exceed, service);
+				case ServiceRingOp::Rebuild:
+					return rebuild_service_ring_one_chash(
+					        start, do_not_exceed, service);
+				default:
+					YANET_LOG_ERROR("Unknown balancer service evaluation operation.");
+					break;
 			}
 			break;
 		default:
 			YANET_THROW("Unknown balancer service scheduler type");
 	}
-	return end;
+	return {start, start};
 }
 
 void generation::evaluate_service_ring(ServiceRingOp op)
@@ -1838,14 +1880,19 @@ void generation::evaluate_service_ring(ServiceRingOp op)
 
 		balancer_service_range_t& range = ring->ranges[balancer_active_services[service_idx]];
 
-		range.start = std::distance(ring->reals, service_start);
-		auto service_end = evaluate_service_ring_one(
+		auto restart = std::distance(ring->reals, service_start);
+		if (op == ServiceRingOp::Update && range.start != restart)
+		{
+			op = ServiceRingOp::Relocate;
+		}
+		range.start = restart;
+		auto [service_end, reserved] = evaluate_service_ring_one(
 		        op,
 		        service_start,
 		        ring_end,
 		        service);
 		range.size = std::distance(service_start, service_end);
-		service_start = service_end;
+		service_start = reserved;
 	}
 }
 
