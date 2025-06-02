@@ -189,11 +189,6 @@ void balancer_t::InspectLookup(
 {
 	std::lock_guard<std::mutex> guard(config_switch_mutex);
 
-	std::stringstream ss;
-	ss << (request->module().empty() ? "nil" : request->module()) << ' '
-	   << (request->has_virtual_ip() ? std::string{convert_to_ip_address(request->virtual_ip())} : "nil");
-	YANET_LOG_ERROR("PDR: CP: request: %s\n", ss.str().c_str());
-
 	auto gs_lock = generations_services.current_lock_guard();
 	const auto& cfg = generations_config.current();
 	for (auto& [module_name, balancer] : cfg.config_balancers)

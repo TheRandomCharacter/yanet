@@ -132,6 +132,7 @@ public: ///< @todo
 };
 
 //
+using namespace std::chrono_literals;
 
 class generation
 {
@@ -204,11 +205,17 @@ protected:
 
 	using RealWeight = std::pair<balancer_real_id_t, decltype(balancer_real_state_t::weight)>;
 
+	std::vector<std::uint32_t> BalancerServiceWeights(const balancer_service_t& service);
+
 	struct ServiceSize
 	{
 		balancer_real_id_t* end;
 		balancer_real_id_t* reserved;
 	};
+
+	std::chrono::milliseconds chash_update;
+	std::chrono::milliseconds chash_make;
+	std::chrono::milliseconds chash_adjust;
 
 	ServiceSize rebuild_service_ring_one_wrr(
 	        balancer_real_id_t* start,

@@ -97,6 +97,14 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 	return eResult::success;
 }
 
+namespace
+{
+void CopyBlancergeneration(dataplane::globalBase::generation& from,
+                           dataplane::globalBase::generation& to)
+{
+}
+} // namespace
+
 eResult cControlPlane::updateGlobalBaseBalancer(const common::idp::updateGlobalBaseBalancer::request& request)
 {
 	if (!errors.empty())
@@ -1002,11 +1010,10 @@ common::idp::BalancerInspectLookup::response cControlPlane::balancer_inspect_loo
 	     real_id != end;
 	     ++real_id)
 	{
-		common::idp::BalancerInspectLookup::Real entry {
-			common::ipv6_address_t{base->balancer_reals[*real_id].destination.bytes},
-			base->balancer_real_states[*real_id].weight,
-			dist[*real_id]
-		};
+		common::idp::BalancerInspectLookup::Real entry{
+		        common::ipv6_address_t{base->balancer_reals[*real_id].destination.bytes},
+		        base->balancer_real_states[*real_id].weight,
+		        dist[*real_id]};
 		response.emplace_back(std::move(entry));
 	}
 
