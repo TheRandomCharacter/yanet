@@ -13,6 +13,8 @@
 
 #include <rte_ether.h>
 
+#include <chash.hpp>
+
 #include "common/idp.h"
 #include "common/result.h"
 
@@ -133,6 +135,8 @@ protected:
 
 	std::mutex mutex;
 	std::mutex balancer_mutex;
+
+	std::map<uint32_t, chash::WeightUpdater> chash_services_;
 
 	bool use_kernel_interface;
 

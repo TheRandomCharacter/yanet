@@ -40,19 +40,55 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 	}
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
-
+	const dataplane::globalBase::generation* reference{nullptr};
 	auto result = eResult::success;
+	auto update = [&](const common::idp::updateGlobalBase::request::value_type& iter,
+	                  dataplane::globalBase::generation* generation) {
+		auto r = eResult::success;
+		if (const auto& type = std::get<0>(iter); type == common::idp::updateGlobalBase::requestType::update_balancer_services)
+		{
+			const auto& request =
+			        std::get<common::idp::updateGlobalBase::update_balancer_services::request>(std::get<1>(iter));
+			auto res = generation->update_balancer_services(request);
+			if (res != eResult::success)
+			{
+				return res;
+			}
+
+			if (reference)
+			{
+				generation->BalancerCopyRingFrom(reference);
+			}
+			else
+			{
+				generation->BalancerCompile(chash_services_);
+				reference = generation;
+			}
+		}
+		else
+		{
+			r = generation->update(iter);
+		}
+		if (r != eResult::success)
+		{
+			++errors["updateGlobalBase"];
+		}
+		return r;
+	};
+
 	for (auto& iter : dataPlane->globalBases)
 	{
 		auto* globalBaseNext = iter.second[dataPlane->currentGlobalBaseId ^ 1];
 		DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::global_base_pre_update);
-		result = globalBaseNext->update(request);
-		DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::global_base_post_update);
-		if (result != eResult::success)
+		for (const auto& one : request)
 		{
-			++errors["updateGlobalBase"];
-			break;
+			if (update(one, globalBaseNext) != eResult::success)
+			{
+				break;
+			}
 		}
+		YADECAP_LOG_DEBUG("done update %i\n", result != eResult::success ? 0 : 1);
+		DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::global_base_post_update);
 	}
 
 	if (result != eResult::success)
@@ -68,12 +104,17 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
-	result = eResult::success;
 	for (auto& iter : dataPlane->globalBases)
 	{
 		auto* globalBaseNext = iter.second[dataPlane->currentGlobalBaseId ^ 1];
 		DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::global_base_pre_update);
-		result = globalBaseNext->update(request);
+		for (const auto& one : request)
+		{
+			if (update(one, globalBaseNext) != eResult::success)
+			{
+				break;
+			}
+		}
 		DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::global_base_post_update);
 		if (result != eResult::success)
 		{
@@ -97,14 +138,6 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 	return eResult::success;
 }
 
-namespace
-{
-void CopyBlancergeneration(dataplane::globalBase::generation& from,
-                           dataplane::globalBase::generation& to)
-{
-}
-} // namespace
-
 eResult cControlPlane::updateGlobalBaseBalancer(const common::idp::updateGlobalBaseBalancer::request& request)
 {
 	if (!errors.empty())
@@ -115,29 +148,61 @@ eResult cControlPlane::updateGlobalBaseBalancer(const common::idp::updateGlobalB
 	YADECAP_MEMORY_BARRIER_COMPILE;
 	DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::balancer_update);
 	std::lock_guard<std::mutex> guard(balancer_mutex);
-
 	auto result = eResult::success;
+	dataplane::globalBase::generation* reference{nullptr};
+
+	auto update = [&](const common::idp::updateGlobalBaseBalancer::request& request,
+	                  dataplane::globalBase::generation* generation) {
+		result = generation->updateBalancer(request);
+		if (result != eResult::success)
+		{
+			++errors["updateGlobalBase"];
+		}
+
+		if (reference)
+		{
+			generation->BalancerCopyRingFrom(reference);
+		}
+		else
+		{
+			generation->BalancerUpdate(chash_services_);
+			reference = generation;
+		}
+		return result;
+	};
+
 	for (auto& iter : dataPlane->globalBases)
 	{
-		auto current_id = dataPlane->currentGlobalBaseId;
-		auto* globalBaseNext = iter.second[current_id];
-		result = globalBaseNext->updateBalancer(request);
-		if (result != eResult::success)
+		auto* globalBaseNext = iter.second[dataPlane->currentGlobalBaseId ^ 1];
+		if (update(request, globalBaseNext) != eResult::success)
 		{
-			++errors["updateGlobalBase"];
 			break;
 		}
+	}
 
-		YADECAP_MEMORY_BARRIER_COMPILE;
+	if (result != eResult::success)
+	{
+		return result;
+	}
 
-		globalBaseNext = iter.second[current_id ^ 1];
-		result = globalBaseNext->updateBalancer(request);
-		if (result != eResult::success)
+	YADECAP_MEMORY_BARRIER_COMPILE;
+
+	switchGlobalBase();
+
+	YADECAP_MEMORY_BARRIER_COMPILE;
+	for (auto& iter : dataPlane->globalBases)
+	{
+		auto* globalBaseNext = iter.second[dataPlane->currentGlobalBaseId ^ 1];
+		if (update(request, globalBaseNext) != eResult::success)
 		{
 			// Practically unreachable.
-			++errors["updateGlobalBase"];
 			break;
 		}
+	}
+
+	if (result != eResult::success)
+	{
+		return result;
 	}
 
 	YADECAP_MEMORY_BARRIER_COMPILE;

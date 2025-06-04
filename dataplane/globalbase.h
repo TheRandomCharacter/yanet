@@ -147,7 +147,7 @@ public:
 
 public:
 	eResult init();
-	eResult update(const common::idp::updateGlobalBase::request& request);
+	eResult update(const common::idp::updateGlobalBase::request::value_type& request);
 	eResult updateBalancer(const common::idp::updateGlobalBaseBalancer::request& request);
 	eResult get(const common::idp::getGlobalBase::request& request, common::idp::getGlobalBase::globalBase& globalBaseResponse) const;
 
@@ -164,7 +164,11 @@ protected:
 	eResult updateNat64statelessTranslation(const common::idp::updateGlobalBase::updateNat64statelessTranslation::request& request);
 	eResult nat46clat_update(const common::idp::updateGlobalBase::nat46clat_update::request& request);
 	eResult update_balancer(const common::idp::updateGlobalBase::update_balancer::request& request);
+
+public:
 	eResult update_balancer_services(const common::idp::updateGlobalBase::update_balancer_services::request& request);
+
+protected:
 	eResult update_balancer_unordered_real(const common::idp::updateGlobalBaseBalancer::update_balancer_unordered_real::request& request);
 	eResult route_lpm_update(const common::idp::updateGlobalBase::route_lpm_update::request& request);
 	eResult route_value_update(const common::idp::updateGlobalBase::route_value_update::request& request);
@@ -207,6 +211,16 @@ protected:
 
 	std::vector<std::uint32_t> BalancerServiceWeights(const balancer_service_t& service);
 
+public:
+	void BalancerCompile(std::map<uint32_t, chash::WeightUpdater>& chup);
+	void BalancerCopyRingFrom(const generation* other);
+	void BalancerUpdate(std::map<uint32_t, chash::WeightUpdater>& chup);
+
+protected:
+	void CompileChashServices(std::map<uint32_t, chash::WeightUpdater>& chup);
+	void CompileWrrServices();
+	void UpdateChashServices(std::map<uint32_t, chash::WeightUpdater>& chup);
+
 	struct ServiceSize
 	{
 		balancer_real_id_t* end;
@@ -221,18 +235,14 @@ protected:
 	        balancer_real_id_t* start,
 	        const balancer_real_id_t* const do_not_exceed,
 	        const balancer_service_t& service);
-	ServiceSize rebuild_service_ring_one_chash(
+	chash::WeightUpdater rebuild_service_ring_one_chash(
 	        balancer_real_id_t* start,
 	        const balancer_real_id_t* const do_not_exceed,
 	        const balancer_service_t& service);
-	ServiceSize init_service_ring_one_chash(
-	        balancer_real_id_t* start,
-	        const balancer_real_id_t* const do_not_exceed,
-	        const balancer_service_t& service);
-	ServiceSize update_service_ring_one_chash(
-	        balancer_real_id_t* start,
-	        const balancer_real_id_t* const do_not_exceed,
-	        const balancer_service_t& service);
+	// ServiceSize update_service_ring_one_chash(
+	//         balancer_real_id_t* start,
+	//         const balancer_real_id_t* const do_not_exceed,
+	//         const balancer_service_t& service);
 	ServiceSize evaluate_service_ring_one(
 	        ServiceRingOp op,
 	        balancer_real_id_t* start,
@@ -371,7 +381,6 @@ public: ///< @todo
 
 	balancer_real_state_t balancer_real_states[YANET_CONFIG_BALANCER_REALS_SIZE];
 	balancer_service_ring_t balancer_service_ring;
-	std::map<const balancer_service_t*, chash::WeightUpdater> chash_updaters;
 
 	int64_t dump_id_to_tag[YANET_CONFIG_DUMP_ID_TO_TAG_SIZE];
 

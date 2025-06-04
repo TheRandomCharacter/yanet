@@ -288,212 +288,203 @@ eResult generation::init()
 	return result;
 }
 
-eResult generation::update(const common::idp::updateGlobalBase::request& request)
+eResult generation::update(const common::idp::updateGlobalBase::request::value_type& iter)
 {
 	eResult result = eResult::success;
 
-	for (const auto& iter : request)
+	const auto& type = std::get<0>(iter);
+	const auto& data = std::get<1>(iter);
+
+	YADECAP_LOG_DEBUG("running update of type %d\n", (int)type);
+
+	if (type == common::idp::updateGlobalBase::requestType::clear)
 	{
-		const auto& type = std::get<0>(iter);
-		const auto& data = std::get<1>(iter);
-
-		YADECAP_LOG_DEBUG("running update of type %d\n", (int)type);
-
-		if (type == common::idp::updateGlobalBase::requestType::clear)
-		{
-			result = clear();
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::updateLogicalPort)
-		{
-			result = updateLogicalPort(std::get<common::idp::updateGlobalBase::updateLogicalPort::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::updateDecap)
-		{
-			result = updateDecap(std::get<common::idp::updateGlobalBase::updateDecap::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::updateDregress)
-		{
-			result = updateDregress(std::get<common::idp::updateGlobalBase::updateDregress::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::update_route)
-		{
-			result = update_route(std::get<common::idp::updateGlobalBase::update_route::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::updateInterface)
-		{
-			result = updateInterface(std::get<common::idp::updateGlobalBase::updateInterface::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::nat64stateful_update)
-		{
-			result = nat64stateful_update(std::get<common::idp::updateGlobalBase::nat64stateful_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::nat64stateful_pool_update)
-		{
-			result = nat64stateful_pool_update(std::get<common::idp::updateGlobalBase::nat64stateful_pool_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::updateNat64stateless)
-		{
-			result = updateNat64stateless(std::get<common::idp::updateGlobalBase::updateNat64stateless::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::updateNat64statelessTranslation)
-		{
-			result = updateNat64statelessTranslation(std::get<common::idp::updateGlobalBase::updateNat64statelessTranslation::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::nat46clat_update)
-		{
-			result = nat46clat_update(std::get<common::idp::updateGlobalBase::nat46clat_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::update_balancer)
-		{
-			result = update_balancer(std::get<common::idp::updateGlobalBase::update_balancer::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::update_balancer_services)
-		{
-			result = update_balancer_services(std::get<common::idp::updateGlobalBase::update_balancer_services::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::route_lpm_update)
-		{
-			result = route_lpm_update(std::get<common::idp::updateGlobalBase::route_lpm_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::route_value_update)
-		{
-			result = route_value_update(std::get<common::idp::updateGlobalBase::route_value_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::route_tunnel_lpm_update)
-		{
-			result = route_tunnel_lpm_update(std::get<common::idp::updateGlobalBase::route_tunnel_lpm_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::route_tunnel_weight_update)
-		{
-			result = route_tunnel_weight_update(std::get<common::idp::updateGlobalBase::route_tunnel_weight_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::route_tunnel_value_update)
-		{
-			result = route_tunnel_value_update(std::get<common::idp::updateGlobalBase::route_tunnel_value_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::early_decap_flags)
-		{
-			result = update_early_decap_flags(std::get<common::idp::updateGlobalBase::update_early_decap_flags::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::acl_network_ipv4_source)
-		{
-			result = acl_network_ipv4_source(std::get<common::idp::updateGlobalBase::acl_network_ipv4_source::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::acl_network_ipv4_destination)
-		{
-			result = acl_network_ipv4_destination(std::get<common::idp::updateGlobalBase::acl_network_ipv4_destination::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::acl_network_ipv6_source)
-		{
-			result = acl_network_ipv6_source(std::get<common::idp::updateGlobalBase::acl_network_ipv6_source::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::acl_network_ipv6_destination_ht)
-		{
-			result = acl_network_ipv6_destination_ht(std::get<common::idp::updateGlobalBase::acl_network_ipv6_destination_ht::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::acl_network_ipv6_destination)
-		{
-			result = acl_network_ipv6_destination(std::get<common::idp::updateGlobalBase::acl_network_ipv6_destination::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::acl_network_table)
-		{
-			result = acl_network_table(std::get<common::idp::updateGlobalBase::acl_network_table::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::acl_network_flags)
-		{
-			result = acl_network_flags(std::get<common::idp::updateGlobalBase::acl_network_flags::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::acl_transport_layers)
-		{
-			result = acl_transport_layers(std::get<common::idp::updateGlobalBase::acl_transport_layers::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::acl_transport_table)
-		{
-			result = acl_transport_table(std::get<common::idp::updateGlobalBase::acl_transport_table::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::acl_total_table)
-		{
-			result = acl_total_table(std::get<common::idp::updateGlobalBase::acl_total_table::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::acl_values)
-		{
-			result = acl_values(std::get<common::idp::updateGlobalBase::acl_values::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::dump_tags_ids)
-		{
-			result = dump_tags_ids(std::get<common::idp::updateGlobalBase::dump_tags_ids::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::dregress_prefix_update)
-		{
-			result = dregress_prefix_update(std::get<common::idp::updateGlobalBase::dregress_prefix_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::dregress_prefix_remove)
-		{
-			result = dregress_prefix_remove(std::get<common::idp::updateGlobalBase::dregress_prefix_remove::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::dregress_prefix_clear)
-		{
-			result = dregress_prefix_clear();
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::dregress_local_prefix_update)
-		{
-			result = dregress_local_prefix_update(std::get<common::idp::updateGlobalBase::dregress_local_prefix_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::dregress_neighbor_update)
-		{
-			/// @deprecated
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::dregress_value_update)
-		{
-			result = dregress_value_update(std::get<common::idp::updateGlobalBase::dregress_value_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::fwstate_synchronization_update)
-		{
-			result = fwstate_synchronization_update(std::get<common::idp::updateGlobalBase::fwstate_synchronization_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::sampler_update)
-		{
-			result = eResult::success;
-			sampler_enabled = std::get<common::idp::updateGlobalBase::sampler_update::request>(data);
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::tun64_update)
-		{
-			result = tun64_update(std::get<common::idp::updateGlobalBase::tun64_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::tun64mappings_update)
-		{
-			result = tun64mappings_update(std::get<common::idp::updateGlobalBase::tun64mappings_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::serial_update)
-		{
-			result = eResult::success;
-			serial = std::get<common::idp::updateGlobalBase::serial_update::request>(data);
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::tsc_state_update)
-		{
-			result = tsc_state_update(std::get<common::idp::updateGlobalBase::tsc_state_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::tscs_base_value_update)
-		{
-			result = tscs_base_value_update(std::get<common::idp::updateGlobalBase::tscs_base_value_update::request>(data));
-		}
-		else if (type == common::idp::updateGlobalBase::requestType::update_host_config)
-		{
-			result = update_host_config(std::get<common::idp::updateGlobalBase::update_host_config::request>(data));
-		}
-		else
-		{
-			YADECAP_LOG_ERROR("invalid request type\n");
-			return eResult::invalidType;
-		}
-		YADECAP_LOG_DEBUG("done update of type %d %i\n", (int)type, result != eResult::success ? 0 : 1);
-
-		if (result != eResult::success)
-		{
-			return result;
-		}
+		result = clear();
 	}
-	YADECAP_LOG_DEBUG("done update %i\n", result != eResult::success ? 0 : 1);
+	else if (type == common::idp::updateGlobalBase::requestType::updateLogicalPort)
+	{
+		result = updateLogicalPort(std::get<common::idp::updateGlobalBase::updateLogicalPort::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::updateDecap)
+	{
+		result = updateDecap(std::get<common::idp::updateGlobalBase::updateDecap::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::updateDregress)
+	{
+		result = updateDregress(std::get<common::idp::updateGlobalBase::updateDregress::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::update_route)
+	{
+		result = update_route(std::get<common::idp::updateGlobalBase::update_route::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::updateInterface)
+	{
+		result = updateInterface(std::get<common::idp::updateGlobalBase::updateInterface::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::nat64stateful_update)
+	{
+		result = nat64stateful_update(std::get<common::idp::updateGlobalBase::nat64stateful_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::nat64stateful_pool_update)
+	{
+		result = nat64stateful_pool_update(std::get<common::idp::updateGlobalBase::nat64stateful_pool_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::updateNat64stateless)
+	{
+		result = updateNat64stateless(std::get<common::idp::updateGlobalBase::updateNat64stateless::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::updateNat64statelessTranslation)
+	{
+		result = updateNat64statelessTranslation(std::get<common::idp::updateGlobalBase::updateNat64statelessTranslation::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::nat46clat_update)
+	{
+		result = nat46clat_update(std::get<common::idp::updateGlobalBase::nat46clat_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::update_balancer)
+	{
+		result = update_balancer(std::get<common::idp::updateGlobalBase::update_balancer::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::update_balancer_services)
+	{
+		result = update_balancer_services(std::get<common::idp::updateGlobalBase::update_balancer_services::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::route_lpm_update)
+	{
+		result = route_lpm_update(std::get<common::idp::updateGlobalBase::route_lpm_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::route_value_update)
+	{
+		result = route_value_update(std::get<common::idp::updateGlobalBase::route_value_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::route_tunnel_lpm_update)
+	{
+		result = route_tunnel_lpm_update(std::get<common::idp::updateGlobalBase::route_tunnel_lpm_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::route_tunnel_weight_update)
+	{
+		result = route_tunnel_weight_update(std::get<common::idp::updateGlobalBase::route_tunnel_weight_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::route_tunnel_value_update)
+	{
+		result = route_tunnel_value_update(std::get<common::idp::updateGlobalBase::route_tunnel_value_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::early_decap_flags)
+	{
+		result = update_early_decap_flags(std::get<common::idp::updateGlobalBase::update_early_decap_flags::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::acl_network_ipv4_source)
+	{
+		result = acl_network_ipv4_source(std::get<common::idp::updateGlobalBase::acl_network_ipv4_source::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::acl_network_ipv4_destination)
+	{
+		result = acl_network_ipv4_destination(std::get<common::idp::updateGlobalBase::acl_network_ipv4_destination::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::acl_network_ipv6_source)
+	{
+		result = acl_network_ipv6_source(std::get<common::idp::updateGlobalBase::acl_network_ipv6_source::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::acl_network_ipv6_destination_ht)
+	{
+		result = acl_network_ipv6_destination_ht(std::get<common::idp::updateGlobalBase::acl_network_ipv6_destination_ht::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::acl_network_ipv6_destination)
+	{
+		result = acl_network_ipv6_destination(std::get<common::idp::updateGlobalBase::acl_network_ipv6_destination::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::acl_network_table)
+	{
+		result = acl_network_table(std::get<common::idp::updateGlobalBase::acl_network_table::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::acl_network_flags)
+	{
+		result = acl_network_flags(std::get<common::idp::updateGlobalBase::acl_network_flags::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::acl_transport_layers)
+	{
+		result = acl_transport_layers(std::get<common::idp::updateGlobalBase::acl_transport_layers::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::acl_transport_table)
+	{
+		result = acl_transport_table(std::get<common::idp::updateGlobalBase::acl_transport_table::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::acl_total_table)
+	{
+		result = acl_total_table(std::get<common::idp::updateGlobalBase::acl_total_table::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::acl_values)
+	{
+		result = acl_values(std::get<common::idp::updateGlobalBase::acl_values::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::dump_tags_ids)
+	{
+		result = dump_tags_ids(std::get<common::idp::updateGlobalBase::dump_tags_ids::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::dregress_prefix_update)
+	{
+		result = dregress_prefix_update(std::get<common::idp::updateGlobalBase::dregress_prefix_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::dregress_prefix_remove)
+	{
+		result = dregress_prefix_remove(std::get<common::idp::updateGlobalBase::dregress_prefix_remove::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::dregress_prefix_clear)
+	{
+		result = dregress_prefix_clear();
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::dregress_local_prefix_update)
+	{
+		result = dregress_local_prefix_update(std::get<common::idp::updateGlobalBase::dregress_local_prefix_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::dregress_neighbor_update)
+	{
+		/// @deprecated
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::dregress_value_update)
+	{
+		result = dregress_value_update(std::get<common::idp::updateGlobalBase::dregress_value_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::fwstate_synchronization_update)
+	{
+		result = fwstate_synchronization_update(std::get<common::idp::updateGlobalBase::fwstate_synchronization_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::sampler_update)
+	{
+		result = eResult::success;
+		sampler_enabled = std::get<common::idp::updateGlobalBase::sampler_update::request>(data);
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::tun64_update)
+	{
+		result = tun64_update(std::get<common::idp::updateGlobalBase::tun64_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::tun64mappings_update)
+	{
+		result = tun64mappings_update(std::get<common::idp::updateGlobalBase::tun64mappings_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::serial_update)
+	{
+		result = eResult::success;
+		serial = std::get<common::idp::updateGlobalBase::serial_update::request>(data);
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::tsc_state_update)
+	{
+		result = tsc_state_update(std::get<common::idp::updateGlobalBase::tsc_state_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::tscs_base_value_update)
+	{
+		result = tscs_base_value_update(std::get<common::idp::updateGlobalBase::tscs_base_value_update::request>(data));
+	}
+	else if (type == common::idp::updateGlobalBase::requestType::update_host_config)
+	{
+		result = update_host_config(std::get<common::idp::updateGlobalBase::update_host_config::request>(data));
+	}
+	else
+	{
+		YADECAP_LOG_ERROR("invalid request type\n");
+		return eResult::invalidType;
+	}
+	YADECAP_LOG_DEBUG("done update of type %d %i\n", (int)type, result != eResult::success ? 0 : 1);
 
 	return result;
 }
@@ -1631,9 +1622,41 @@ eResult generation::update_balancer_services(const common::idp::updateGlobalBase
 
 	std::copy(binding.begin(), binding.end(), balancer_service_reals);
 
-	evaluate_service_ring(ServiceRingOp::Rebuild);
-
 	return eResult::success;
+}
+
+void generation::BalancerCompile(
+        std::map<uint32_t, chash::WeightUpdater>& chup)
+{
+	YANET_LOG_ERROR("TTR: BalancerCompile.\n");
+	CompileChashServices(chup);
+	CompileWrrServices();
+	YANET_LOG_ERROR("TTR: BalancerCompileEnd.\n");
+}
+
+void generation::BalancerUpdate(
+        std::map<uint32_t, chash::WeightUpdater>& chup)
+{
+	YANET_LOG_ERROR("TTR: BalancerUpdate.\n");
+	UpdateChashServices(chup);
+	CompileWrrServices();
+	YANET_LOG_ERROR("TTR: BalancerUpdate end.\n");
+}
+
+void generation::BalancerCopyRingFrom(const generation* other)
+{
+	auto& ring = balancer_service_ring;
+	const auto& oring = other->balancer_service_ring;
+	ring.chash_size = oring.chash_size;
+	ring.size = oring.size;
+	std::copy(oring.reals, oring.reals + oring.size, ring.reals);
+	for (uint32_t service_idx = 0;
+	     service_idx < balancer_services_count;
+	     ++service_idx)
+	{
+		const auto sid = balancer_active_services[service_idx];
+		ring.ranges[sid] = oring.ranges[sid];
+	}
 }
 
 eResult generation::update_balancer_unordered_real(const common::idp::updateGlobalBaseBalancer::update_balancer_unordered_real::request& request)
@@ -1714,7 +1737,7 @@ generation::ServiceSize generation::rebuild_service_ring_one_wrr(
 	return {end, reserve};
 }
 
-generation::ServiceSize generation::rebuild_service_ring_one_chash(
+chash::WeightUpdater generation::rebuild_service_ring_one_chash(
         balancer_real_id_t* start,
         const balancer_real_id_t* const do_not_exceed,
         const balancer_service_t& service)
@@ -1768,13 +1791,7 @@ generation::ServiceSize generation::rebuild_service_ring_one_chash(
 	YANET_LOG_ERROR("TTR: Adjusted weight updater for %lu reals in %lu ms\n",
 	                reals.size(),
 	                d.count());
-
-	balancer_real_id_t* end = start + updater.value().LookupSize();
-
-	chash_updaters.erase(&service);
-	chash_updaters.emplace(&service, std::move(updater.value()));
-
-	return {end, end};
+	return updater.value();
 }
 
 std::vector<std::uint32_t> generation::BalancerServiceWeights(const balancer_service_t& service)
@@ -1790,7 +1807,7 @@ std::vector<std::uint32_t> generation::BalancerServiceWeights(const balancer_ser
 		uint32_t w = balancer_real_states[real_id].weight;
 		if (w > YANET_CONFIG_BALANCER_REAL_WEIGHT_MAX)
 		{
-			w = 100;
+			w = YANET_CONFIG_BALANCER_REAL_WEIGHT_MAX;
 			balancer_real_states[real_id].weight = w;
 			YANET_LOG_ERROR("Requested real weight is over YANET_CONFIG_BALANCER_REAL_WEIGHT_MAX, clamping to %u", w);
 		}
@@ -1799,67 +1816,38 @@ std::vector<std::uint32_t> generation::BalancerServiceWeights(const balancer_ser
 	return weights;
 }
 
-generation::ServiceSize generation::init_service_ring_one_chash(
-        balancer_real_id_t* start,
-        const balancer_real_id_t* const do_not_exceed,
-        const balancer_service_t& service)
-{
-	auto up = chash_updaters.find(&service);
-	if (up == chash_updaters.end())
-	{
-		YANET_LOG_ERROR("No state information for updating requested service.\n");
-		return {start, start};
-	}
-	auto weights = BalancerServiceWeights(service);
-	auto& updater = up->second;
-	updater.SetWeights(&balancer_service_reals[service.real_start], weights.data(), service.real_size);
+// generation::ServiceSize generation::update_service_ring_one_chash(
+//         balancer_real_id_t* start,
+//         const balancer_real_id_t* const do_not_exceed,
+//         const balancer_service_t& service)
+// {
+// 	auto ts = std::chrono::steady_clock::now();
+// 	auto up = chash_updaters.find(&service);
+// 	if (up == chash_updaters.end())
+// 	{
+// 		YANET_LOG_ERROR("No state information for updating requested service.\n");
+// 		return {start, start};
+// 	}
+// 	auto weights = BalancerServiceWeights(service);
+// 	auto& updater = up->second;
+// 	updater.UpdateLookup(
+// 	        &balancer_service_reals[service.real_start],
+// 	        weights.data(),
+// 	        service.real_size,
+// 	        start);
+// 	auto t1 = std::chrono::steady_clock::now();
 
-	auto rsize = updater.LookupSize();
-	if (start + rsize > do_not_exceed)
-	{
-		YANET_THROW("Insufficient space for balancer service");
-		std::abort();
-	}
+// 	updater.Adjust(start);
 
-	updater.InitLookup(start);
-	updater.Adjust(start);
+// 	balancer_real_id_t* end = start + updater.LookupSize();
+// 	auto te = std::chrono::steady_clock::now();
 
-	balancer_real_id_t* end = start + updater.LookupSize();
-	return {end, end};
-}
-
-generation::ServiceSize generation::update_service_ring_one_chash(
-        balancer_real_id_t* start,
-        const balancer_real_id_t* const do_not_exceed,
-        const balancer_service_t& service)
-{
-	auto ts = std::chrono::steady_clock::now();
-	auto up = chash_updaters.find(&service);
-	if (up == chash_updaters.end())
-	{
-		YANET_LOG_ERROR("No state information for updating requested service.\n");
-		return {start, start};
-	}
-	auto weights = BalancerServiceWeights(service);
-	auto& updater = up->second;
-	updater.UpdateLookup(
-	        &balancer_service_reals[service.real_start],
-	        weights.data(),
-	        service.real_size,
-	        start);
-	auto t1 = std::chrono::steady_clock::now();
-
-	updater.Adjust(start);
-
-	balancer_real_id_t* end = start + updater.LookupSize();
-	auto te = std::chrono::steady_clock::now();
-
-	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - ts);
-	chash_update += d;
-	d = std::chrono::duration_cast<std::chrono::milliseconds>(te - t1);
-	chash_adjust += d;
-	return {end, end};
-}
+// 	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - ts);
+// 	chash_update += d;
+// 	d = std::chrono::duration_cast<std::chrono::milliseconds>(te - t1);
+// 	chash_adjust += d;
+// 	return {end, end};
+// }
 
 generation::ServiceSize generation::evaluate_service_ring_one(
         ServiceRingOp op,
@@ -1879,11 +1867,9 @@ generation::ServiceSize generation::evaluate_service_ring_one(
 			switch (op)
 			{
 				case ServiceRingOp::Update:
-					return update_service_ring_one_chash(start, do_not_exceed, service);
+					//					return update_service_ring_one_chash(start, do_not_exceed, service);
 				case ServiceRingOp::Relocate:
-					return init_service_ring_one_chash(start, do_not_exceed, service);
 				case ServiceRingOp::Rebuild:
-					return rebuild_service_ring_one_chash(start, do_not_exceed, service);
 				default:
 					YANET_LOG_ERROR("Unknown balancer service evaluation operation.");
 					break;
@@ -1943,6 +1929,120 @@ void generation::evaluate_service_ring(ServiceRingOp op)
 		                chash_update.count(),
 		                chash_adjust.count());
 	}
+}
+
+void generation::CompileChashServices(
+        std::map<uint32_t, chash::WeightUpdater>& chup)
+{
+	chash_update = 0s;
+	chash_make = 0s;
+	chash_adjust = 0s;
+	auto ts = std::chrono::steady_clock::now();
+
+	balancer_service_ring_t* ring = &balancer_service_ring;
+	chup.clear();
+	ring->chash_size = 0;
+	balancer_real_id_t* service_start = ring->reals;
+	balancer_real_id_t* ring_end = ring->reals + YANET_CONFIG_BALANCER_WEIGHTS_SIZE;
+	for (uint32_t service_idx = 0;
+	     service_idx < balancer_services_count;
+	     ++service_idx)
+	{
+		const uint32_t id = balancer_active_services[service_idx];
+		const balancer_service_t& service = balancer_services[id];
+		if ((service.scheduler != ::balancer::scheduler::chash) &&
+		    (service.scheduler != ::balancer::scheduler::wlc))
+		{
+			continue;
+		}
+
+		balancer_service_range_t& range = ring->ranges[id];
+
+		range.start = ring->chash_size;
+		chup.emplace(id, rebuild_service_ring_one_chash(service_start, ring_end, service));
+		range.size = chup.at(id).LookupSize();
+		ring->chash_size += range.size;
+		ring->size = ring->chash_size;
+		service_start += range.size;
+	}
+
+	auto te = std::chrono::steady_clock::now();
+	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
+	YANET_LOG_ERROR("TTR: rebuilt services in %lu ms. %lu making hashrings, %lu adjusting.\n",
+	                d.count(),
+	                chash_make.count(),
+	                chash_adjust.count());
+}
+
+void generation::CompileWrrServices()
+{
+	balancer_service_ring_t* ring = &balancer_service_ring;
+	balancer_real_id_t* service_start = ring->reals + ring->chash_size;
+	balancer_real_id_t* ring_end = ring->reals + YANET_CONFIG_BALANCER_WEIGHTS_SIZE;
+	ring->size = ring->chash_size;
+	for (uint32_t service_idx = 0;
+	     service_idx < balancer_services_count;
+	     ++service_idx)
+	{
+		const uint32_t id = balancer_active_services[service_idx];
+		const balancer_service_t& service = balancer_services[id];
+		if ((service.scheduler != ::balancer::scheduler::rr) &&
+		    (service.scheduler != ::balancer::scheduler::wrr))
+		{
+			continue;
+		}
+
+		balancer_service_range_t& range = ring->ranges[id];
+
+		range.start = ring->size;
+		auto [service_end, reserved] = rebuild_service_ring_one_wrr(
+		        service_start,
+		        ring_end,
+		        service);
+		range.size = std::distance(service_start, service_end);
+		ring->size += std::distance(service_start, reserved);
+		service_start = reserved;
+	}
+}
+
+void generation::UpdateChashServices(
+        std::map<uint32_t, chash::WeightUpdater>& chup)
+{
+	chash_update = 0s;
+	chash_make = 0s;
+	chash_adjust = 0s;
+	auto ts = std::chrono::steady_clock::now();
+
+	balancer_service_ring_t* ring = &balancer_service_ring;
+	for (uint32_t service_idx = 0;
+	     service_idx < balancer_services_count;
+	     ++service_idx)
+	{
+		const uint32_t id = balancer_active_services[service_idx];
+		const balancer_service_t& service = balancer_services[id];
+		if ((service.scheduler != ::balancer::scheduler::chash) &&
+		    (service.scheduler != ::balancer::scheduler::wlc))
+		{
+			continue;
+		}
+
+		balancer_service_range_t& range = ring->ranges[id];
+
+		// TODO
+		auto weights = BalancerServiceWeights(service);
+		chup.at(id).UpdateLookup(
+		        &balancer_service_reals[service.real_start],
+		        weights.data(),
+		        service.real_size,
+		        ring->reals + range.start);
+	}
+
+	auto te = std::chrono::steady_clock::now();
+	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
+	YANET_LOG_ERROR("TTR: updated services in %lu ms. %lu updating hashrings, %lu adjusting.\n",
+	                d.count(),
+	                chash_make.count(),
+	                chash_adjust.count());
 }
 
 eResult generation::route_lpm_update(const common::idp::updateGlobalBase::route_lpm_update::request& request)

@@ -571,6 +571,8 @@ struct balancer_service_ring_t
 {
 	balancer_service_range_t ranges[YANET_CONFIG_BALANCER_SERVICES_SIZE];
 	balancer_real_id_t reals[YANET_CONFIG_BALANCER_WEIGHTS_SIZE];
+	uint32_t chash_size = 0;
+	uint32_t size = 0;
 };
 
 static_assert(YANET_CONFIG_COUNTERS_SIZE <= 0xFFFFFF, "invalid size");
