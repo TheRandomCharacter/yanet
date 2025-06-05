@@ -563,7 +563,7 @@ struct balancer_real_state_t
 
 struct balancer_service_range_t
 {
-	uint32_t start;
+	uint32_t* start;
 	uint32_t size;
 };
 

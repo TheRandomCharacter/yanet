@@ -1645,7 +1645,8 @@ void generation::BalancerCopyRingFrom(const generation* other)
 	     ++service_idx)
 	{
 		const auto sid = balancer_active_services[service_idx];
-		ring.ranges[sid] = oring.ranges[sid];
+		ring.ranges[sid].start = oring.ranges[sid].start - oring.reals + ring.reals;
+		ring.ranges[sid].size = oring.ranges[sid].size;
 	}
 }
 
@@ -1832,7 +1833,7 @@ void generation::CompileChashServices(
 
 		balancer_service_range_t& range = ring->ranges[id];
 
-		range.start = ring->chash_size;
+		range.start = ring->reals + ring->chash_size;
 		chup.emplace(id, rebuild_service_ring_one_chash(service_start, ring_end, service));
 		if (chup.find(id) == chup.end())
 		{
@@ -1873,7 +1874,7 @@ void generation::CompileWrrServices()
 
 		balancer_service_range_t& range = ring->ranges[id];
 
-		range.start = ring->size;
+		range.start = ring->reals + ring->size;
 		auto [service_end, reserved] = rebuild_service_ring_one_wrr(
 		        service_start,
 		        ring_end,
@@ -1923,7 +1924,7 @@ void generation::UpdateChashServices(
 			                        service.real_size));
 		}
 
-		chup.at(id).Update(ring->reals + range.start, patches.at(id));
+		chup.at(id).Update(range.start, patches.at(id));
 	}
 
 	// auto te = std::chrono::steady_clock::now();

@@ -155,7 +155,7 @@ eResult cControlPlane::updateGlobalBaseBalancer(const common::idp::updateGlobalB
 	std::uint64_t count{};
 	for (const auto& [type, data] : request)
 	{
-		count+=std::get<common::idp::updateGlobalBaseBalancer::update_balancer_unordered_real::request>(data).size();
+		count += std::get<common::idp::updateGlobalBaseBalancer::update_balancer_unordered_real::request>(data).size();
 	}
 
 	auto ts = std::chrono::steady_clock::now();
@@ -1063,10 +1063,11 @@ common::idp::balancer_service_connections::response cControlPlane::balancer_serv
 
 namespace
 {
-std::unordered_map<balancer_real_id_t, std::uint32_t> get_cell_distribution(balancer_real_id_t* start, uint32_t size)
+std::unordered_map<balancer_real_id_t, std::uint32_t> get_cell_distribution(
+        dataplane::globalBase::balancer_service_range_t& range)
 {
 	std::unordered_map<balancer_real_id_t, std::uint32_t> dist;
-	for (auto cell = start, end = cell + size; cell != end; ++cell)
+	for (auto cell = range.start, end = cell + range.size; cell != end; ++cell)
 	{
 		++dist[*cell];
 	}
@@ -1080,8 +1081,7 @@ common::idp::BalancerInspectLookup::response cControlPlane::balancer_inspect_loo
 	const auto& base = dataPlane->globalBases.begin()->second[dataPlane->currentGlobalBaseId];
 	const auto& service = base->balancer_services[request.service_id];
 
-	auto dist = get_cell_distribution(base->balancer_service_ring.reals + base->balancer_service_ring.ranges[request.service_id].start,
-	                                  base->balancer_service_ring.ranges[request.service_id].size);
+	auto dist = get_cell_distribution(base->balancer_service_ring.ranges[request.service_id]);
 
 	for (auto real_id = base->balancer_service_reals + service.real_start,
 	          end = real_id + service.real_size;
