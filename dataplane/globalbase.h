@@ -212,14 +212,16 @@ protected:
 	std::vector<std::uint32_t> BalancerServiceWeights(const balancer_service_t& service);
 
 public:
-	void BalancerCompile(std::map<uint32_t, chash::WeightUpdater>& chup);
+	void BalancerCompile(std::unordered_map<uint32_t, chash::WeightUpdater>& chup);
 	void BalancerCopyRingFrom(const generation* other);
-	void BalancerUpdate(std::map<uint32_t, chash::WeightUpdater>& chup);
+	void BalancerUpdate(std::unordered_map<uint32_t, chash::WeightUpdater>& chup,
+	                    std::unordered_map<uint32_t, chash::Patch>& patches);
 
 protected:
-	void CompileChashServices(std::map<uint32_t, chash::WeightUpdater>& chup);
+	void CompileChashServices(std::unordered_map<uint32_t, chash::WeightUpdater>& chup);
 	void CompileWrrServices();
-	void UpdateChashServices(std::map<uint32_t, chash::WeightUpdater>& chup);
+	void UpdateChashServices(std::unordered_map<uint32_t, chash::WeightUpdater>& chup,
+	                         std::unordered_map<uint32_t, chash::Patch>& patches);
 
 	struct ServiceSize
 	{
@@ -239,16 +241,6 @@ protected:
 	        balancer_real_id_t* start,
 	        const balancer_real_id_t* const do_not_exceed,
 	        const balancer_service_t& service);
-	// ServiceSize update_service_ring_one_chash(
-	//         balancer_real_id_t* start,
-	//         const balancer_real_id_t* const do_not_exceed,
-	//         const balancer_service_t& service);
-	ServiceSize evaluate_service_ring_one(
-	        ServiceRingOp op,
-	        balancer_real_id_t* start,
-	        const balancer_real_id_t* const do_not_exceed,
-	        const balancer_service_t& service);
-	void evaluate_service_ring(ServiceRingOp op);
 	inline uint64_t count_real_connections(uint32_t counter_id);
 
 public: ///< @todo

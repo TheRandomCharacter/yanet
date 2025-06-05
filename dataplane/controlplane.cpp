@@ -39,6 +39,10 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 		return eResult::dataplaneIsBroken;
 	}
 
+	auto ts = std::chrono::steady_clock::now();
+
+	std::lock_guard<std::mutex> balancer_guard(dataPlane->controlPlane->balancer_mutex);
+
 	YADECAP_MEMORY_BARRIER_COMPILE;
 	const dataplane::globalBase::generation* reference{nullptr};
 	auto result = eResult::success;
@@ -134,6 +138,10 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 	waitAllWorkers();
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
+	auto te = std::chrono::steady_clock::now();
+	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
+
+	YANET_LOG_ERROR("TTR: BalancerCompileEnd. %lums\n", d.count());
 
 	return eResult::success;
 }
@@ -144,12 +152,20 @@ eResult cControlPlane::updateGlobalBaseBalancer(const common::idp::updateGlobalB
 	{
 		return eResult::dataplaneIsBroken;
 	}
+	std::uint64_t count{};
+	for (const auto& [type, data] : request)
+	{
+		count+=std::get<common::idp::updateGlobalBaseBalancer::update_balancer_unordered_real::request>(data).size();
+	}
+
+	auto ts = std::chrono::steady_clock::now();
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 	DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::balancer_update);
 	std::lock_guard<std::mutex> guard(balancer_mutex);
 	auto result = eResult::success;
-	dataplane::globalBase::generation* reference{nullptr};
+
+	std::unordered_map<uint32_t, chash::Patch> patches;
 
 	auto update = [&](const common::idp::updateGlobalBaseBalancer::request& request,
 	                  dataplane::globalBase::generation* generation) {
@@ -159,15 +175,8 @@ eResult cControlPlane::updateGlobalBaseBalancer(const common::idp::updateGlobalB
 			++errors["updateGlobalBase"];
 		}
 
-		if (reference)
-		{
-			generation->BalancerCopyRingFrom(reference);
-		}
-		else
-		{
-			generation->BalancerUpdate(chash_services_);
-			reference = generation;
-		}
+		generation->BalancerUpdate(chash_services_, patches);
+
 		return result;
 	};
 
@@ -210,6 +219,10 @@ eResult cControlPlane::updateGlobalBaseBalancer(const common::idp::updateGlobalB
 	waitAllWorkers();
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
+	auto te = std::chrono::steady_clock::now();
+	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
+
+	YANET_LOG_ERROR("TTR: BalancerUpdate end. %lu in %lums\n", count, d.count());
 
 	return eResult::success;
 }

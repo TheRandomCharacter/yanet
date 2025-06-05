@@ -347,7 +347,8 @@ eResult generation::update(const common::idp::updateGlobalBase::request::value_t
 	}
 	else if (type == common::idp::updateGlobalBase::requestType::update_balancer_services)
 	{
-		result = update_balancer_services(std::get<common::idp::updateGlobalBase::update_balancer_services::request>(data));
+		YANET_LOG_ERROR("TTR: unexpected update_balancer_services");
+		// result = update_balancer_services(std::get<common::idp::updateGlobalBase::update_balancer_services::request>(data));
 	}
 	else if (type == common::idp::updateGlobalBase::requestType::route_lpm_update)
 	{
@@ -492,19 +493,13 @@ eResult generation::update(const common::idp::updateGlobalBase::request::value_t
 eResult generation::updateBalancer(const common::idp::updateGlobalBaseBalancer::request& request)
 {
 	eResult result = eResult::success;
-	std::uint32_t reals_updated{};
 	for (const auto& iter : request)
 	{
 		const auto& type = std::get<0>(iter);
 		const auto& data = std::get<1>(iter);
 
-		YADECAP_LOG_DEBUG("running update of type %d\n", (int)type);
-
 		if (type == common::idp::updateGlobalBaseBalancer::requestType::update_balancer_unordered_real)
 		{
-			const auto& r = std::get<common::idp::updateGlobalBaseBalancer::update_balancer_unordered_real::request>(data);
-			YANET_LOG_ERROR("TTR: request update %lu\n", r.size());
-			reals_updated += r.size();
 			result = update_balancer_unordered_real(std::get<common::idp::updateGlobalBaseBalancer::update_balancer_unordered_real::request>(data));
 		}
 		else
@@ -518,7 +513,6 @@ eResult generation::updateBalancer(const common::idp::updateGlobalBaseBalancer::
 			return result;
 		}
 	}
-	YANET_LOG_ERROR("TTR: Update contains total %u\n", reals_updated);
 
 	return result;
 }
@@ -1477,7 +1471,6 @@ eResult generation::update_balancer(const common::idp::updateGlobalBase::update_
 eResult generation::update_balancer_services(const common::idp::updateGlobalBase::update_balancer_services::request& request)
 {
 	DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::global_base_update_balancer);
-	std::lock_guard<std::mutex> guard(dataPlane->controlPlane->balancer_mutex);
 
 	const auto& services = std::get<0>(request);
 	if (services.size() > YANET_CONFIG_BALANCER_SERVICES_SIZE)
@@ -1626,21 +1619,18 @@ eResult generation::update_balancer_services(const common::idp::updateGlobalBase
 }
 
 void generation::BalancerCompile(
-        std::map<uint32_t, chash::WeightUpdater>& chup)
+        std::unordered_map<uint32_t, chash::WeightUpdater>& chup)
 {
-	YANET_LOG_ERROR("TTR: BalancerCompile.\n");
 	CompileChashServices(chup);
 	CompileWrrServices();
-	YANET_LOG_ERROR("TTR: BalancerCompileEnd.\n");
 }
 
 void generation::BalancerUpdate(
-        std::map<uint32_t, chash::WeightUpdater>& chup)
+        std::unordered_map<uint32_t, chash::WeightUpdater>& chup,
+        std::unordered_map<uint32_t, chash::Patch>& patches)
 {
-	YANET_LOG_ERROR("TTR: BalancerUpdate.\n");
-	UpdateChashServices(chup);
+	UpdateChashServices(chup, patches);
 	CompileWrrServices();
-	YANET_LOG_ERROR("TTR: BalancerUpdate end.\n");
 }
 
 void generation::BalancerCopyRingFrom(const generation* other)
@@ -1677,8 +1667,7 @@ eResult generation::update_balancer_unordered_real(const common::idp::updateGlob
 		real_state = new_state;
 	}
 
-	evaluate_service_ring(ServiceRingOp::Update);
-
+	// evaluate_service_ring
 	return eResult::success;
 }
 
@@ -1816,128 +1805,13 @@ std::vector<std::uint32_t> generation::BalancerServiceWeights(const balancer_ser
 	return weights;
 }
 
-// generation::ServiceSize generation::update_service_ring_one_chash(
-//         balancer_real_id_t* start,
-//         const balancer_real_id_t* const do_not_exceed,
-//         const balancer_service_t& service)
-// {
-// 	auto ts = std::chrono::steady_clock::now();
-// 	auto up = chash_updaters.find(&service);
-// 	if (up == chash_updaters.end())
-// 	{
-// 		YANET_LOG_ERROR("No state information for updating requested service.\n");
-// 		return {start, start};
-// 	}
-// 	auto weights = BalancerServiceWeights(service);
-// 	auto& updater = up->second;
-// 	updater.UpdateLookup(
-// 	        &balancer_service_reals[service.real_start],
-// 	        weights.data(),
-// 	        service.real_size,
-// 	        start);
-// 	auto t1 = std::chrono::steady_clock::now();
-
-// 	updater.Adjust(start);
-
-// 	balancer_real_id_t* end = start + updater.LookupSize();
-// 	auto te = std::chrono::steady_clock::now();
-
-// 	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - ts);
-// 	chash_update += d;
-// 	d = std::chrono::duration_cast<std::chrono::milliseconds>(te - t1);
-// 	chash_adjust += d;
-// 	return {end, end};
-// }
-
-generation::ServiceSize generation::evaluate_service_ring_one(
-        ServiceRingOp op,
-        balancer_real_id_t* start,
-        const balancer_real_id_t* const do_not_exceed,
-        const balancer_service_t& service)
-{
-	using scheduler = ::balancer::scheduler;
-	switch (service.scheduler)
-	{
-		case scheduler::rr:
-		case scheduler::wrr:
-			return rebuild_service_ring_one_wrr(
-			        start, do_not_exceed, service);
-		case scheduler::wlc:
-		case scheduler::chash:
-			switch (op)
-			{
-				case ServiceRingOp::Update:
-					//					return update_service_ring_one_chash(start, do_not_exceed, service);
-				case ServiceRingOp::Relocate:
-				case ServiceRingOp::Rebuild:
-				default:
-					YANET_LOG_ERROR("Unknown balancer service evaluation operation.");
-					break;
-			}
-			break;
-		default:
-			YANET_THROW("Unknown balancer service scheduler type");
-	}
-	return {start, start};
-}
-
-void generation::evaluate_service_ring(ServiceRingOp op)
-{
-	chash_update = 0s;
-	chash_make = 0s;
-	chash_adjust = 0s;
-	auto ts = std::chrono::steady_clock::now();
-	balancer_service_ring_t* ring = &balancer_service_ring;
-	balancer_real_id_t* service_start = ring->reals;
-	balancer_real_id_t* ring_end = ring->reals + YANET_CONFIG_BALANCER_WEIGHTS_SIZE;
-	for (uint32_t service_idx = 0;
-	     service_idx < balancer_services_count;
-	     ++service_idx)
-	{
-		const balancer_service_t& service = balancer_services[balancer_active_services[service_idx]];
-
-		balancer_service_range_t& range = ring->ranges[balancer_active_services[service_idx]];
-
-		auto restart = std::distance(ring->reals, service_start);
-		if (op == ServiceRingOp::Update && range.start != restart)
-		{
-			op = ServiceRingOp::Relocate;
-			YANET_LOG_ERROR("TTR: relocating %u", service_idx);
-		}
-		range.start = restart;
-		auto [service_end, reserved] = evaluate_service_ring_one(
-		        op,
-		        service_start,
-		        ring_end,
-		        service);
-		range.size = std::distance(service_start, service_end);
-		service_start = reserved;
-	}
-	auto te = std::chrono::steady_clock::now();
-	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
-	if (op == ServiceRingOp::Rebuild)
-	{
-		YANET_LOG_ERROR("TTR: rebuilt services in %lu ms. %lu making hashrings, %lu adjusting.\n",
-		                d.count(),
-		                chash_make.count(),
-		                chash_adjust.count());
-	}
-	else
-	{
-		YANET_LOG_ERROR("TTR: updated services in %lu ms. %lu updating hashrings, %lu adjusting.\n",
-		                d.count(),
-		                chash_update.count(),
-		                chash_adjust.count());
-	}
-}
-
 void generation::CompileChashServices(
-        std::map<uint32_t, chash::WeightUpdater>& chup)
+        std::unordered_map<uint32_t, chash::WeightUpdater>& chup)
 {
-	chash_update = 0s;
-	chash_make = 0s;
-	chash_adjust = 0s;
-	auto ts = std::chrono::steady_clock::now();
+	// chash_update = 0s;
+	// chash_make = 0s;
+	// chash_adjust = 0s;
+	// auto ts = std::chrono::steady_clock::now();
 
 	balancer_service_ring_t* ring = &balancer_service_ring;
 	chup.clear();
@@ -1960,18 +1834,23 @@ void generation::CompileChashServices(
 
 		range.start = ring->chash_size;
 		chup.emplace(id, rebuild_service_ring_one_chash(service_start, ring_end, service));
+		if (chup.find(id) == chup.end())
+		{
+			YANET_LOG_ERROR("TTR: CompileChashServices: Chash updater not found for %u", id);
+			std::abort();
+		}
 		range.size = chup.at(id).LookupSize();
 		ring->chash_size += range.size;
 		ring->size = ring->chash_size;
 		service_start += range.size;
 	}
 
-	auto te = std::chrono::steady_clock::now();
-	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
-	YANET_LOG_ERROR("TTR: rebuilt services in %lu ms. %lu making hashrings, %lu adjusting.\n",
-	                d.count(),
-	                chash_make.count(),
-	                chash_adjust.count());
+	// auto te = std::chrono::steady_clock::now();
+	// auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
+	// YANET_LOG_ERROR("TTR: rebuilt services in %lu ms. %lu making hashrings, %lu adjusting.\n",
+	//                 d.count(),
+	//                 chash_make.count(),
+	//                 chash_adjust.count());
 }
 
 void generation::CompileWrrServices()
@@ -2006,12 +1885,13 @@ void generation::CompileWrrServices()
 }
 
 void generation::UpdateChashServices(
-        std::map<uint32_t, chash::WeightUpdater>& chup)
+        std::unordered_map<uint32_t, chash::WeightUpdater>& chup,
+        std::unordered_map<uint32_t, chash::Patch>& patches)
 {
-	chash_update = 0s;
-	chash_make = 0s;
-	chash_adjust = 0s;
-	auto ts = std::chrono::steady_clock::now();
+	// chash_update = 0s;
+	// chash_make = 0s;
+	// chash_adjust = 0s;
+	// auto ts = std::chrono::steady_clock::now();
 
 	balancer_service_ring_t* ring = &balancer_service_ring;
 	for (uint32_t service_idx = 0;
@@ -2027,22 +1907,31 @@ void generation::UpdateChashServices(
 		}
 
 		balancer_service_range_t& range = ring->ranges[id];
+		if (chup.find(id) == chup.end())
+		{
+			YANET_LOG_ERROR("TTR: UpdateChashServices: Chash updater not found for %u", id);
+			std::abort();
+		}
 
-		// TODO
-		auto weights = BalancerServiceWeights(service);
-		chup.at(id).UpdateLookup(
-		        &balancer_service_reals[service.real_start],
-		        weights.data(),
-		        service.real_size,
-		        ring->reals + range.start);
+		if (patches.find(id) == patches.end())
+		{
+			auto weights = BalancerServiceWeights(service);
+			patches.emplace(id,
+			                chup.at(id).Update(
+			                        &balancer_service_reals[service.real_start],
+			                        weights.data(),
+			                        service.real_size));
+		}
+
+		chup.at(id).Update(ring->reals + range.start, patches.at(id));
 	}
 
-	auto te = std::chrono::steady_clock::now();
-	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
-	YANET_LOG_ERROR("TTR: updated services in %lu ms. %lu updating hashrings, %lu adjusting.\n",
-	                d.count(),
-	                chash_make.count(),
-	                chash_adjust.count());
+	// auto te = std::chrono::steady_clock::now();
+	// auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
+	// YANET_LOG_ERROR("TTR: updated services in %lu ms. %lu updating hashrings, %lu adjusting.\n",
+	//                 d.count(),
+	//                 chash_make.count(),
+	//                 chash_adjust.count());
 }
 
 eResult generation::route_lpm_update(const common::idp::updateGlobalBase::route_lpm_update::request& request)

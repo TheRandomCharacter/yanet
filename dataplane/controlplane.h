@@ -136,7 +136,7 @@ protected:
 	std::mutex mutex;
 	std::mutex balancer_mutex;
 
-	std::map<uint32_t, chash::WeightUpdater> chash_services_;
+	std::unordered_map<uint32_t, chash::WeightUpdater> chash_services_;
 
 	bool use_kernel_interface;
 
