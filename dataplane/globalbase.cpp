@@ -1618,26 +1618,43 @@ eResult generation::update_balancer_services(const common::idp::updateGlobalBase
 	return eResult::success;
 }
 
-void generation::BalancerCompile(
-        std::unordered_map<uint32_t, chash::WeightUpdater>& chup)
+eResult generation::SetChashServices(std::unordered_map<balancer_service_id_t, std::vector<balancer_real_id_t>>& lookups)
 {
-	CompileChashServices(chup);
-	CompileWrrServices();
+	for (uint32_t service_idx = 0;
+	     service_idx < balancer_services_count;
+	     ++service_idx)
+	{
+		const auto sid = balancer_active_services[service_idx];
+		if ((balancer_services[sid].scheduler != ::balancer::scheduler::chash) &&
+		    (balancer_services[sid].scheduler != ::balancer::scheduler::wlc))
+		{
+			continue;
+		}
+
+		if (lookups.find(sid) == lookups.end())
+		{
+			std::stringstream ss;
+			for (auto l:lookups)
+			{
+				ss << l.first << ", ";
+			}
+			YANET_LOG_ERROR("Generation failed to set range for service %u (%s)\n", sid, ss.str().c_str());
+			return eResult::invalidId;
+		}
+
+		auto& lookup = lookups[sid];
+		auto& range = balancer_service_ring.ranges[sid];
+
+		range.start = lookup.data();
+		range.size = lookup.size();
+	}
+	return eResult::success;
 }
 
-void generation::BalancerUpdate(
-        std::unordered_map<uint32_t, chash::WeightUpdater>& chup,
-        std::unordered_map<uint32_t, chash::Patch>& patches)
-{
-	UpdateChashServices(chup, patches);
-	CompileWrrServices();
-}
-
-void generation::BalancerCopyRingFrom(const generation* other)
+void generation::BalancerCopyWrrRingFrom(const generation* other)
 {
 	auto& ring = balancer_service_ring;
 	const auto& oring = other->balancer_service_ring;
-	ring.chash_size = oring.chash_size;
 	ring.size = oring.size;
 	std::copy(oring.reals, oring.reals + oring.size, ring.reals);
 	for (uint32_t service_idx = 0;
@@ -1645,6 +1662,11 @@ void generation::BalancerCopyRingFrom(const generation* other)
 	     ++service_idx)
 	{
 		const auto sid = balancer_active_services[service_idx];
+		if ((balancer_services[sid].scheduler != ::balancer::scheduler::wrr) &&
+		    (balancer_services[sid].scheduler != ::balancer::scheduler::rr))
+		{
+			continue;
+		}
 		ring.ranges[sid].start = oring.ranges[sid].start - oring.reals + ring.reals;
 		ring.ranges[sid].size = oring.ranges[sid].size;
 	}
@@ -1806,60 +1828,11 @@ std::vector<std::uint32_t> generation::BalancerServiceWeights(const balancer_ser
 	return weights;
 }
 
-void generation::CompileChashServices(
-        std::unordered_map<uint32_t, chash::WeightUpdater>& chup)
-{
-	// chash_update = 0s;
-	// chash_make = 0s;
-	// chash_adjust = 0s;
-	// auto ts = std::chrono::steady_clock::now();
-
-	balancer_service_ring_t* ring = &balancer_service_ring;
-	chup.clear();
-	ring->chash_size = 0;
-	balancer_real_id_t* service_start = ring->reals;
-	balancer_real_id_t* ring_end = ring->reals + YANET_CONFIG_BALANCER_WEIGHTS_SIZE;
-	for (uint32_t service_idx = 0;
-	     service_idx < balancer_services_count;
-	     ++service_idx)
-	{
-		const uint32_t id = balancer_active_services[service_idx];
-		const balancer_service_t& service = balancer_services[id];
-		if ((service.scheduler != ::balancer::scheduler::chash) &&
-		    (service.scheduler != ::balancer::scheduler::wlc))
-		{
-			continue;
-		}
-
-		balancer_service_range_t& range = ring->ranges[id];
-
-		range.start = ring->reals + ring->chash_size;
-		chup.emplace(id, rebuild_service_ring_one_chash(service_start, ring_end, service));
-		if (chup.find(id) == chup.end())
-		{
-			YANET_LOG_ERROR("TTR: CompileChashServices: Chash updater not found for %u", id);
-			std::abort();
-		}
-		range.size = chup.at(id).LookupSize();
-		ring->chash_size += range.size;
-		ring->size = ring->chash_size;
-		service_start += range.size;
-	}
-
-	// auto te = std::chrono::steady_clock::now();
-	// auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
-	// YANET_LOG_ERROR("TTR: rebuilt services in %lu ms. %lu making hashrings, %lu adjusting.\n",
-	//                 d.count(),
-	//                 chash_make.count(),
-	//                 chash_adjust.count());
-}
-
 void generation::CompileWrrServices()
 {
 	balancer_service_ring_t* ring = &balancer_service_ring;
-	balancer_real_id_t* service_start = ring->reals + ring->chash_size;
+	balancer_real_id_t* service_start = ring->reals;
 	balancer_real_id_t* ring_end = ring->reals + YANET_CONFIG_BALANCER_WEIGHTS_SIZE;
-	ring->size = ring->chash_size;
 	for (uint32_t service_idx = 0;
 	     service_idx < balancer_services_count;
 	     ++service_idx)
@@ -1874,27 +1847,26 @@ void generation::CompileWrrServices()
 
 		balancer_service_range_t& range = ring->ranges[id];
 
-		range.start = ring->reals + ring->size;
+		range.start = service_start;
 		auto [service_end, reserved] = rebuild_service_ring_one_wrr(
 		        service_start,
 		        ring_end,
 		        service);
 		range.size = std::distance(service_start, service_end);
-		ring->size += std::distance(service_start, reserved);
 		service_start = reserved;
 	}
+	ring->size = std::distance(ring->reals, service_start);
 }
 
-void generation::UpdateChashServices(
+eResult generation::UpdateChashServices(
         std::unordered_map<uint32_t, chash::WeightUpdater>& chup,
-        std::unordered_map<uint32_t, chash::Patch>& patches)
+        std::unordered_map<uint32_t, chash::Todo>& todo)
 {
 	// chash_update = 0s;
 	// chash_make = 0s;
 	// chash_adjust = 0s;
 	// auto ts = std::chrono::steady_clock::now();
 
-	balancer_service_ring_t* ring = &balancer_service_ring;
 	for (uint32_t service_idx = 0;
 	     service_idx < balancer_services_count;
 	     ++service_idx)
@@ -1907,24 +1879,29 @@ void generation::UpdateChashServices(
 			continue;
 		}
 
-		balancer_service_range_t& range = ring->ranges[id];
 		if (chup.find(id) == chup.end())
 		{
 			YANET_LOG_ERROR("TTR: UpdateChashServices: Chash updater not found for %u", id);
-			std::abort();
+			return eResult::invalidId;
 		}
 
-		if (patches.find(id) == patches.end())
+		if (todo.find(id) == todo.end())
 		{
-			auto weights = BalancerServiceWeights(service);
-			patches.emplace(id,
-			                chup.at(id).Update(
-			                        &balancer_service_reals[service.real_start],
-			                        weights.data(),
-			                        service.real_size));
+			YANET_LOG_ERROR("TTR: UpdateChashServices: Chash todo not found for %u", id);
+			return eResult::invalidId;
 		}
 
-		chup.at(id).Update(range.start, patches.at(id));
+		std::vector<balancer_real_id_t> ids;
+		std::vector<uint32_t> weights;
+
+		for (auto i = service.real_start; i < service.real_start + service.real_size; ++i)
+		{
+			const auto& id = balancer_service_reals[i];
+			ids.push_back(id);
+			weights.push_back(balancer_real_states[id].weight);
+		}
+
+		chup.at(id).Update(ids.data(), weights.data(), ids.size(), todo.at(id));
 	}
 
 	// auto te = std::chrono::steady_clock::now();
@@ -1933,6 +1910,7 @@ void generation::UpdateChashServices(
 	//                 d.count(),
 	//                 chash_make.count(),
 	//                 chash_adjust.count());
+	return eResult::success;
 }
 
 eResult generation::route_lpm_update(const common::idp::updateGlobalBase::route_lpm_update::request& request)

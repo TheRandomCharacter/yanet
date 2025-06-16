@@ -137,6 +137,17 @@ protected:
 	std::mutex balancer_mutex;
 
 	std::unordered_map<uint32_t, chash::WeightUpdater> chash_services_;
+	std::atomic<bool> balancer_painter_run_ = false;
+	std::thread balancer_painter_;
+	using lookups_t = std::unordered_map<balancer_service_id_t, std::vector<balancer_real_id_t>>;
+	lookups_t chash_lookups_;
+	using todo_t = std::unordered_map<uint32_t, chash::Todo>;
+	todo_t chash_todo_;
+	std::unordered_map<balancer_service_id_t, balancer_real_id_t> chash_todo_begin_;
+	[[nodiscard]] std::variant<eResult, lookups_t>
+	BalancerCompileChashServices();
+	eResult EnqueueBalancerChashLookupsUpdated();
+	void StartBalancerPainter();
 
 	bool use_kernel_interface;
 

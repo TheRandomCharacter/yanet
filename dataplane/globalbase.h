@@ -212,17 +212,12 @@ protected:
 	std::vector<std::uint32_t> BalancerServiceWeights(const balancer_service_t& service);
 
 public:
-	void BalancerCompile(std::unordered_map<uint32_t, chash::WeightUpdater>& chup);
-	void BalancerCopyRingFrom(const generation* other);
-	void BalancerUpdate(std::unordered_map<uint32_t, chash::WeightUpdater>& chup,
-	                    std::unordered_map<uint32_t, chash::Patch>& patches);
-
-protected:
-	void CompileChashServices(std::unordered_map<uint32_t, chash::WeightUpdater>& chup);
+	void BalancerCopyWrrRingFrom(const generation* other);
 	void CompileWrrServices();
-	void UpdateChashServices(std::unordered_map<uint32_t, chash::WeightUpdater>& chup,
-	                         std::unordered_map<uint32_t, chash::Patch>& patches);
-
+	eResult SetChashServices(std::unordered_map<balancer_service_id_t, std::vector<balancer_real_id_t>>&);
+	eResult UpdateChashServices(std::unordered_map<uint32_t, chash::WeightUpdater>& chup,
+	                         std::unordered_map<uint32_t, chash::Todo>& todo);
+protected:
 	struct ServiceSize
 	{
 		balancer_real_id_t* end;

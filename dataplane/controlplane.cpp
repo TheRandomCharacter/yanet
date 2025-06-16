@@ -31,6 +31,160 @@ eResult cControlPlane::init(bool use_kernel_interface)
 	return result;
 }
 
+std::variant<eResult, cControlPlane::lookups_t> cControlPlane::BalancerCompileChashServices()
+{
+	YANET_LOG_ERROR("TTR: Started BalancerCompileChashServices\n");
+
+	todo_t todos;
+	lookups_t new_lookups;
+
+	// rebuild chash_services_;
+	chash_services_.clear();
+	if (dataPlane->globalBases.empty())
+	{
+		YANET_LOG_INFO("No chash rings since no globalbases\n");
+		return {};
+	}
+	auto* nextgen = dataPlane->globalBases.begin()->second[dataPlane->currentGlobalBaseId ^ 1];
+
+	auto& services = nextgen->balancer_services;
+	for (auto cur = nextgen->balancer_active_services,
+	          end = cur + nextgen->balancer_services_count;
+	     cur != end;
+	     ++cur)
+	{
+		const balancer_service_id_t id = *cur;
+		const auto& service = nextgen->balancer_services[id];
+		if ((services[id].scheduler != ::balancer::scheduler::chash) &&
+		    (services[id].scheduler != ::balancer::scheduler::wlc))
+		{
+			continue;
+		}
+
+		std::vector<ipv6_address_t> reals;
+		std::vector<uint32_t> weights;
+		reals.reserve(service.real_size);
+		weights.reserve(service.real_size);
+		for (uint32_t real_idx = service.real_start, real_end = real_idx + service.real_size;
+		     real_idx != real_end;
+		     ++real_idx)
+		{
+			balancer_real_id_t real_id = nextgen->balancer_service_reals[real_idx];
+			reals.emplace_back(nextgen->balancer_reals[real_id].destination);
+			weights.push_back(nextgen->balancer_real_states[real_id].weight);
+		}
+
+		auto rsize = chash::WeightUpdater::LookupRequiredSize(
+		        service.real_size, YANET_CONFIG_BALANCER_CELLS_PER_WEIGHT_UNIT);
+		auto oupdater = chash::WeightUpdater::MakeWeightUpdater(
+		        reals.data(),
+		        &nextgen->balancer_service_reals[service.real_start],
+		        weights.data(),
+		        service.real_size,
+		        YANET_DEFAULT_BALANCER_REAL_MAPPINGS_LIMIT,
+		        YANET_CONFIG_BALANCER_CELLS_PER_WEIGHT_UNIT,
+		        rsize);
+		if (!oupdater)
+		{
+			YANET_LOG_ERROR("Failed to intialize updater for balancer service %u.\n", id);
+			return eResult::errorBalancerUpdate;
+		}
+		auto& updater = oupdater.value();
+		std::vector<balancer_real_id_t> lookup(rsize);
+		updater.InitLookup(lookup.data());
+		chash_services_.emplace(id, std::move(updater));
+		new_lookups.emplace(id, std::move(lookup));
+
+		chash::Todo todo(rsize);
+		todos.emplace(id, std::move(todo));
+	}
+	YANET_LOG_ERROR("TTR: BalancerCompileChashServices after made updaters\n");
+
+	std::stringstream ss;
+	for (auto& [id, l] : new_lookups)
+	{
+		ss << "{" << id << ", " << l.size() << "},";
+	}
+	ss << new_lookups.size();
+	YANET_LOG_ERROR("TTR: compiled lookups: %s\n", ss.str().c_str());
+
+	YANET_LOG_ERROR("TTR: stoping painter\n");
+	balancer_painter_run_ = false;
+	if (balancer_painter_.joinable())
+	{
+		YANET_LOG_ERROR("TTR: joining painter\n");
+		balancer_painter_.join();
+	}
+
+	chash_todo_ = std::move(todos);
+	chash_todo_begin_.clear();
+	for (auto& [id, _] : chash_todo_)
+	{
+		GCC_BUG_UNUSED(_);
+		chash_todo_begin_.emplace(id, std::numeric_limits<balancer_real_id_t>::max());
+	}
+
+	YANET_LOG_ERROR("TTR: Finishing BalancerCompileChashServices\n");
+	return new_lookups;
+}
+
+void cControlPlane::StartBalancerPainter()
+{
+	YANET_LOG_ERROR("TTR: starting painter\n");
+	balancer_painter_run_ = true;
+	std::thread replacement([this]() {
+		YANET_LOG_ERROR("TTR: Started painter thread\n");
+		while (!chash_todo_.empty())
+		{
+			auto ts = std::chrono::steady_clock::now();
+			uint64_t counter{};
+			for (auto& [id, plan] : chash_todo_)
+			{
+				if (!balancer_painter_run_.load())
+				{
+					return;
+				}
+				balancer_real_id_t tint = chash_todo_begin_.at(id);
+				auto& lookup = chash_lookups_.at(id);
+
+				for (std::size_t cursor = 0; cursor != plan.size(); ++cursor)
+				{
+					chash::TodoOperation op;
+					// plan.at(cursor).exchange(op, std::memory_order_acq_rel);
+					std::swap(op, plan.at(cursor));
+					if (op)
+					{
+						if (op.on())
+						{
+							tint = op.id();
+						}
+						else
+						{
+							tint = lookup.at(chash::PrevRingPosition(lookup.size(), cursor));
+						}
+					}
+					else if (chash_services_.at(id).Enabled(cursor))
+					{
+						tint = std::numeric_limits<balancer_real_id_t>::max();
+					}
+
+					if (tint != std::numeric_limits<balancer_real_id_t>::max())
+					{
+						lookup.at(cursor) = tint;
+					}
+				}
+				chash_todo_begin_.at(id) = tint;
+				counter += plan.size();
+			}
+			auto te = std::chrono::steady_clock::now();
+			auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
+			YANET_LOG_ERROR("TTR: painter finished sweep in %lums. %lu cells\n", d.count(), counter);
+		}
+		YANET_LOG_ERROR("TTR: End of painter thread\n");
+	});
+	std::swap(balancer_painter_, replacement);
+}
+
 common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const common::idp::updateGlobalBase::request& request)
 {
 	std::lock_guard<std::mutex> guard(mutex);
@@ -41,7 +195,7 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 
 	auto ts = std::chrono::steady_clock::now();
 
-	std::lock_guard<std::mutex> balancer_guard(dataPlane->controlPlane->balancer_mutex);
+	std::lock_guard<std::mutex> balancer_guard(balancer_mutex);
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 	const dataplane::globalBase::generation* reference{nullptr};
@@ -61,11 +215,11 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 
 			if (reference)
 			{
-				generation->BalancerCopyRingFrom(reference);
+				generation->BalancerCopyWrrRingFrom(reference);
 			}
 			else
 			{
-				generation->BalancerCompile(chash_services_);
+				generation->CompileWrrServices();
 				reference = generation;
 			}
 		}
@@ -100,6 +254,44 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 		return result;
 	}
 
+	bool need_balancer_update = false;
+	for (const auto& one : request)
+	{
+		if (const auto& type = std::get<0>(one); type == common::idp::updateGlobalBase::requestType::update_balancer_services)
+		{
+			need_balancer_update = true;
+		}
+	}
+
+	lookups_t lookups;
+	if (need_balancer_update)
+	{
+		auto res = BalancerCompileChashServices();
+		if (std::holds_alternative<eResult>(res))
+		{
+			++errors["updateGlobalBase"];
+			return eResult::dataplaneIsBroken;
+		}
+		lookups = std::move(std::get<lookups_t>(res));
+
+		std::stringstream ss;
+		for (auto& [id, l] : lookups)
+		{
+			ss << "{" << id << ", " << l.size() << "},";
+		}
+		ss << lookups.size();
+		YANET_LOG_ERROR("TTR: returned lookups: %s\n", ss.str().c_str());
+		for (auto& iter : dataPlane->globalBases)
+		{
+			auto* globalBaseNext = iter.second[dataPlane->currentGlobalBaseId ^ 1];
+			if (auto res = globalBaseNext->SetChashServices(lookups); res != eResult::success)
+			{
+				++errors["updateGlobalBase"];
+				return res;
+			}
+		}
+	}
+
 	DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::global_base_switch);
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
@@ -107,6 +299,12 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 	switchGlobalBase();
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
+
+	if (need_balancer_update)
+	{
+		chash_lookups_ = std::move(lookups);
+		StartBalancerPainter();
+	}
 
 	for (auto& iter : dataPlane->globalBases)
 	{
@@ -133,6 +331,8 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 		return result;
 	}
 
+	// set_chash_services();
+
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
 	waitAllWorkers();
@@ -141,8 +341,13 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 	auto te = std::chrono::steady_clock::now();
 	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
 
-	YANET_LOG_ERROR("TTR: BalancerCompileEnd. %lums\n", d.count());
+	YANET_LOG_ERROR("TTR: updateGlobalBase end. %lums\n", d.count());
 
+	return eResult::success;
+}
+
+eResult cControlPlane::EnqueueBalancerChashLookupsUpdated()
+{
 	return eResult::success;
 }
 
@@ -175,7 +380,7 @@ eResult cControlPlane::updateGlobalBaseBalancer(const common::idp::updateGlobalB
 			++errors["updateGlobalBase"];
 		}
 
-		generation->BalancerUpdate(chash_services_, patches);
+		generation->CompileWrrServices();
 
 		return result;
 	};
@@ -193,6 +398,14 @@ eResult cControlPlane::updateGlobalBaseBalancer(const common::idp::updateGlobalB
 	{
 		return result;
 	}
+
+	if (dataPlane->globalBases.empty())
+	{
+		YANET_LOG_INFO("No chash rings since no globalbases\n");
+		return {};
+	}
+	auto* nextgen = dataPlane->globalBases.begin()->second[dataPlane->currentGlobalBaseId ^ 1];
+	nextgen->UpdateChashServices(chash_services_, chash_todo_);
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
