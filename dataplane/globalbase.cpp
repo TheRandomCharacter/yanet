@@ -1618,8 +1618,10 @@ eResult generation::update_balancer_services(const common::idp::updateGlobalBase
 	return eResult::success;
 }
 
-eResult generation::SetChashServices(std::unordered_map<balancer_service_id_t, std::vector<balancer_real_id_t>>& lookups)
+eResult generation::SetChashServices(chash::Balancer& b)
 {
+	static bool first = false;
+	first  = !first;
 	for (uint32_t service_idx = 0;
 	     service_idx < balancer_services_count;
 	     ++service_idx)
@@ -1631,22 +1633,22 @@ eResult generation::SetChashServices(std::unordered_map<balancer_service_id_t, s
 			continue;
 		}
 
-		if (lookups.find(sid) == lookups.end())
+		if (!b.Contains(sid))
 		{
-			std::stringstream ss;
-			for (auto l:lookups)
-			{
-				ss << l.first << ", ";
-			}
-			YANET_LOG_ERROR("Generation failed to set range for service %u (%s)\n", sid, ss.str().c_str());
+			YANET_LOG_ERROR("Generation failed to set range for service %u\n", sid);
 			return eResult::invalidId;
 		}
 
-		auto& lookup = lookups[sid];
 		auto& range = balancer_service_ring.ranges[sid];
 
-		range.start = lookup.data();
-		range.size = lookup.size();
+		auto [beg, end] = b.Lookup(sid);
+
+		range.start = &(*beg);
+		range.size = std::distance(beg, end);
+		if (first)
+		{
+			YANET_LOG_ERROR("TTR: Service %u range is set to %p, %u\n", sid, range.start, range.size);
+		}
 	}
 	return eResult::success;
 }
@@ -1749,63 +1751,6 @@ generation::ServiceSize generation::rebuild_service_ring_one_wrr(
 	return {end, reserve};
 }
 
-chash::WeightUpdater generation::rebuild_service_ring_one_chash(
-        balancer_real_id_t* start,
-        const balancer_real_id_t* const do_not_exceed,
-        const balancer_service_t& service)
-{
-	utils::Deferer defer([]() { YADECAP_MEMORY_BARRIER_COMPILE; });
-	std::vector<ipv6_address_t> reals;
-	std::vector<std::uint32_t> weights;
-	reals.reserve(service.real_size);
-	weights.reserve(service.real_size);
-	for (uint32_t real_idx = service.real_start, real_end = real_idx + service.real_size;
-	     real_idx != real_end;
-	     ++real_idx)
-	{
-		balancer_real_id_t real_id = balancer_service_reals[real_idx];
-		reals.emplace_back(balancer_reals[real_id].destination);
-		weights.push_back(balancer_real_states[real_id].weight);
-	}
-	auto rsize = chash::WeightUpdater::LookupRequiredSize(
-	        service.real_size, YANET_CONFIG_BALANCER_CELLS_PER_WEIGHT_UNIT);
-	if (start + rsize > do_not_exceed)
-	{
-		YANET_THROW("Insufficient space for balancer service");
-		std::abort();
-	}
-	auto ts = std::chrono::steady_clock::now();
-	auto updater = chash::WeightUpdater::MakeWeightUpdater(
-	        reals.data(),
-	        &balancer_service_reals[service.real_start],
-	        weights.data(),
-	        service.real_size,
-	        YANET_DEFAULT_BALANCER_REAL_MAPPINGS_LIMIT,
-	        YANET_CONFIG_BALANCER_CELLS_PER_WEIGHT_UNIT,
-	        rsize);
-	auto te = std::chrono::steady_clock::now();
-	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
-	chash_make += d;
-	YANET_LOG_ERROR("TTR: Made weight updater for %lu reals in %lu ms\n",
-	                reals.size(),
-	                d.count());
-	if (!updater)
-	{
-		YANET_THROW("Failed to intialize updater for balancer service reals");
-		std::abort();
-	}
-	updater.value().InitLookup(start);
-	ts = std::chrono::steady_clock::now();
-	updater.value().Adjust(start);
-	te = std::chrono::steady_clock::now();
-	d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
-	chash_adjust += d;
-	YANET_LOG_ERROR("TTR: Adjusted weight updater for %lu reals in %lu ms\n",
-	                reals.size(),
-	                d.count());
-	return updater.value();
-}
-
 std::vector<std::uint32_t> generation::BalancerServiceWeights(const balancer_service_t& service)
 {
 	std::vector<std::uint32_t> weights;
@@ -1858,9 +1803,7 @@ void generation::CompileWrrServices()
 	ring->size = std::distance(ring->reals, service_start);
 }
 
-eResult generation::UpdateChashServices(
-        std::unordered_map<uint32_t, chash::WeightUpdater>& chup,
-        std::unordered_map<uint32_t, chash::Todo>& todo)
+eResult generation::UpdateChashServices(chash::Balancer& chup)
 {
 	// chash_update = 0s;
 	// chash_make = 0s;
@@ -1879,29 +1822,25 @@ eResult generation::UpdateChashServices(
 			continue;
 		}
 
-		if (chup.find(id) == chup.end())
+		if (!chup.Contains(id))
 		{
 			YANET_LOG_ERROR("TTR: UpdateChashServices: Chash updater not found for %u", id);
 			return eResult::invalidId;
 		}
 
-		if (todo.find(id) == todo.end())
-		{
-			YANET_LOG_ERROR("TTR: UpdateChashServices: Chash todo not found for %u", id);
-			return eResult::invalidId;
-		}
-
-		std::vector<balancer_real_id_t> ids;
 		std::vector<uint32_t> weights;
+		weights.reserve(service.real_size);
 
 		for (auto i = service.real_start; i < service.real_start + service.real_size; ++i)
 		{
 			const auto& id = balancer_service_reals[i];
-			ids.push_back(id);
 			weights.push_back(balancer_real_states[id].weight);
 		}
 
-		chup.at(id).Update(ids.data(), weights.data(), ids.size(), todo.at(id));
+		chup.UpdateWeights(id,
+		                   balancer_service_reals + service.real_start,
+		                   balancer_service_reals + service.real_start + service.real_size,
+		                   weights.begin());
 	}
 
 	// auto te = std::chrono::steady_clock::now();

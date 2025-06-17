@@ -7,7 +7,7 @@
 #include <rte_ether.h>
 #include <rte_ip.h>
 
-#include <chash.hpp>
+#include <balancer.hpp>
 
 #include "common/idp.h"
 #include "common/result.h"
@@ -214,9 +214,9 @@ protected:
 public:
 	void BalancerCopyWrrRingFrom(const generation* other);
 	void CompileWrrServices();
-	eResult SetChashServices(std::unordered_map<balancer_service_id_t, std::vector<balancer_real_id_t>>&);
-	eResult UpdateChashServices(std::unordered_map<uint32_t, chash::WeightUpdater>& chup,
-	                         std::unordered_map<uint32_t, chash::Todo>& todo);
+	eResult SetChashServices(chash::Balancer& b);
+	eResult UpdateChashServices(chash::Balancer& b);
+
 protected:
 	struct ServiceSize
 	{
@@ -229,10 +229,6 @@ protected:
 	std::chrono::milliseconds chash_adjust;
 
 	ServiceSize rebuild_service_ring_one_wrr(
-	        balancer_real_id_t* start,
-	        const balancer_real_id_t* const do_not_exceed,
-	        const balancer_service_t& service);
-	chash::WeightUpdater rebuild_service_ring_one_chash(
 	        balancer_real_id_t* start,
 	        const balancer_real_id_t* const do_not_exceed,
 	        const balancer_service_t& service);
