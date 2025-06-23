@@ -1931,6 +1931,53 @@ void cDataPlane::switch_worker_base()
 	controlPlane->switchBase();
 }
 
+void cDataPlane::waitAllWorkers()
+{
+	YADECAP_MEMORY_BARRIER_COMPILE;
+
+	for (const cWorker* worker : workers_vector)
+	{
+		uint64_t startIteration = worker->iteration;
+		uint64_t nextIteration = startIteration;
+		while (nextIteration - startIteration <= (uint64_t)16)
+		{
+			YADECAP_MEMORY_BARRIER_COMPILE;
+			nextIteration = worker->iteration;
+		}
+	}
+
+	for (const auto& [core_id, worker] : worker_gcs)
+	{
+		GCC_BUG_UNUSED(core_id);
+
+		uint64_t startIteration = worker->iteration;
+		uint64_t nextIteration = startIteration;
+		while (nextIteration - startIteration <= (uint64_t)16)
+		{
+			YADECAP_MEMORY_BARRIER_COMPILE;
+			nextIteration = worker->iteration;
+		}
+	}
+
+	YADECAP_MEMORY_BARRIER_COMPILE;
+}
+
+void cDataPlane::switchGlobalBase()
+{
+	YADECAP_MEMORY_BARRIER_COMPILE;
+
+	{
+		std::lock_guard<std::mutex> guard(currentGlobalBaseId_mutex);
+		currentGlobalBaseId ^= 1;
+	}
+
+	YADECAP_MEMORY_BARRIER_COMPILE;
+
+	switch_worker_base();
+
+	YADECAP_MEMORY_BARRIER_COMPILE;
+}
+
 eResult cDataPlane::parseConfig(const std::string& configFilePath)
 {
 	eResult result = eResult::success;

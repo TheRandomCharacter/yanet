@@ -88,8 +88,6 @@ public:
 	eResult balancer_state_clear();
 
 	void switchBase();
-	void switchGlobalBase();
-	virtual void waitAllWorkers();
 
 private:
 	[[nodiscard]] const std::vector<cWorker*>& workers_vector() const;
@@ -138,6 +136,7 @@ protected:
 
 	chash::Balancer chash_balancer;
 	eResult BalancerCompileChashServices();
+	eResult BalancerSetChashServices();
 
 	bool use_kernel_interface;
 

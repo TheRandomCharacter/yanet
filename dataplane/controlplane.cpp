@@ -70,13 +70,17 @@ eResult cControlPlane::BalancerCompileChashServices()
 			weights.push_back(nextgen->balancer_real_states[real_id].weight);
 		}
 
-		if(!chash_balancer.AddService(
+		auto f = [this]() {
+			BalancerSetChashServices();
+		};
+
+		if (!chash_balancer.AddService(
 			id,
 			&nextgen->balancer_service_reals[service.real_start],
 			&nextgen->balancer_service_reals[service.real_start] + service.real_size,
 			reals.begin(),
-			weights.begin()
-		))
+			 weights.begin(),
+			f,f))
 		{
 			YANET_LOG_ERROR("Failed to intialize updater for balancer service %u.\n", id);
 			return eResult::errorBalancerUpdate;
@@ -84,6 +88,31 @@ eResult cControlPlane::BalancerCompileChashServices()
 	}
 	YANET_LOG_ERROR("TTR: Finishing BalancerCompileChashServices\n");
 	return eResult::success;
+}
+
+eResult cControlPlane::BalancerSetChashServices()
+{
+	return dataPlane->GlobalbasesTransform([this](dataplane::globalBase::generation* gen) {
+		auto& services = gen->balancer_services;
+		for (auto cur = gen->balancer_active_services,
+		          end = cur + gen->balancer_services_count;
+		     cur != end;
+		     ++cur)
+		{
+			const balancer_service_id_t id = *cur;
+			if ((services[id].scheduler != ::balancer::scheduler::chash) &&
+			    (services[id].scheduler != ::balancer::scheduler::wlc))
+			{
+				continue;
+			}
+
+			auto [b, e] = chash_balancer.Lookup(id);
+			auto& range = gen->balancer_service_ring.ranges[id];
+			range.start = &(*b);
+			range.size = std::distance(b, e);
+		}
+		return eResult::success;
+	});
 }
 
 common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const common::idp::updateGlobalBase::request& request)
@@ -188,7 +217,7 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
-	switchGlobalBase();
+	dataPlane->switchGlobalBase();
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
@@ -232,7 +261,7 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
-	waitAllWorkers();
+	dataPlane->waitAllWorkers();
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 	auto te = std::chrono::steady_clock::now();
@@ -304,7 +333,7 @@ eResult cControlPlane::updateGlobalBaseBalancer(const common::idp::updateGlobalB
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
-	switchGlobalBase();
+	dataPlane->switchGlobalBase();
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 	for (auto& iter : dataPlane->globalBases)
@@ -324,7 +353,7 @@ eResult cControlPlane::updateGlobalBaseBalancer(const common::idp::updateGlobalB
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
-	waitAllWorkers();
+	dataPlane->waitAllWorkers();
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
@@ -1376,7 +1405,7 @@ void cControlPlane::switchBase()
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
-	waitAllWorkers();
+	dataPlane->waitAllWorkers();
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
@@ -1395,53 +1424,6 @@ void cControlPlane::switchBase()
 		auto& baseNext = worker->bases[worker->current_base_id ^ 1];
 
 		baseNext = base;
-	}
-
-	YADECAP_MEMORY_BARRIER_COMPILE;
-}
-
-void cControlPlane::switchGlobalBase()
-{
-	YADECAP_MEMORY_BARRIER_COMPILE;
-
-	{
-		std::lock_guard<std::mutex> guard(dataPlane->currentGlobalBaseId_mutex);
-		dataPlane->currentGlobalBaseId ^= 1;
-	}
-
-	YADECAP_MEMORY_BARRIER_COMPILE;
-
-	dataPlane->switch_worker_base();
-
-	YADECAP_MEMORY_BARRIER_COMPILE;
-}
-
-void cControlPlane::waitAllWorkers()
-{
-	YADECAP_MEMORY_BARRIER_COMPILE;
-
-	for (const cWorker* worker : dataPlane->workers_vector)
-	{
-		uint64_t startIteration = worker->iteration;
-		uint64_t nextIteration = startIteration;
-		while (nextIteration - startIteration <= (uint64_t)16)
-		{
-			YADECAP_MEMORY_BARRIER_COMPILE;
-			nextIteration = worker->iteration;
-		}
-	}
-
-	for (const auto& [core_id, worker] : dataPlane->worker_gcs)
-	{
-		GCC_BUG_UNUSED(core_id);
-
-		uint64_t startIteration = worker->iteration;
-		uint64_t nextIteration = startIteration;
-		while (nextIteration - startIteration <= (uint64_t)16)
-		{
-			YADECAP_MEMORY_BARRIER_COMPILE;
-			nextIteration = worker->iteration;
-		}
 	}
 
 	YADECAP_MEMORY_BARRIER_COMPILE;

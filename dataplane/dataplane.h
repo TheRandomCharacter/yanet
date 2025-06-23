@@ -235,6 +235,43 @@ protected:
 public:
 	std::map<tSocketId, dataplane::globalBase::atomic*> globalBaseAtomics;
 
+	void waitAllWorkers();
+	void switchGlobalBase();
+
+	template<typename F>
+	eResult GlobalbasesTransform(F&& func)
+	{
+		for (auto iter : globalBases)
+		{
+			auto* globalBaseNext = iter.second[currentGlobalBaseId ^ 1];
+			if (func(globalBaseNext) != eResult::success)
+			{
+				return eResult::dataplaneIsBroken;
+			}
+		}
+
+		YADECAP_MEMORY_BARRIER_COMPILE;
+
+		switchGlobalBase();
+
+		YADECAP_MEMORY_BARRIER_COMPILE;
+
+		for (auto iter : globalBases)
+		{
+			auto* globalBaseNext = iter.second[currentGlobalBaseId ^ 1];
+			if (func(globalBaseNext) != eResult::success)
+			{
+				return eResult::dataplaneIsBroken;
+			}
+		}
+
+		YADECAP_MEMORY_BARRIER_COMPILE;
+
+		waitAllWorkers();
+
+		return eResult::success;
+	}
+
 protected:
 	size_t numaNodesInUse;
 	std::map<tSocketId, std::array<dataplane::globalBase::generation*, 2>> globalBases;
