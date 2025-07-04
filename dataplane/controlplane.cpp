@@ -70,17 +70,12 @@ eResult cControlPlane::BalancerCompileChashServices()
 			weights.push_back(nextgen->balancer_real_states[real_id].weight);
 		}
 
-		auto f = [this]() {
-			BalancerSetChashServices();
-		};
-
 		if (!chash_balancer.AddService(
-			id,
-			&nextgen->balancer_service_reals[service.real_start],
-			&nextgen->balancer_service_reals[service.real_start] + service.real_size,
-			reals.begin(),
-			 weights.begin(),
-			f,f))
+		            id,
+		            &nextgen->balancer_service_reals[service.real_start],
+		            &nextgen->balancer_service_reals[service.real_start] + service.real_size,
+		            reals.begin(),
+		            weights.begin()))
 		{
 			YANET_LOG_ERROR("Failed to intialize updater for balancer service %u.\n", id);
 			return eResult::errorBalancerUpdate;
@@ -108,8 +103,8 @@ eResult cControlPlane::BalancerSetChashServices()
 
 			auto [b, e] = chash_balancer.Lookup(id);
 			auto& range = gen->balancer_service_ring.ranges[id];
-			range.start = &(*b);
-			range.size = std::distance(b, e);
+			range.start = b;
+			range.size = e;
 		}
 		return eResult::success;
 	});
@@ -117,6 +112,7 @@ eResult cControlPlane::BalancerSetChashServices()
 
 common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const common::idp::updateGlobalBase::request& request)
 {
+	YANET_LOG_ERROR("TTR: updateGlobalBase start.\n");
 	std::lock_guard<std::mutex> guard(mutex);
 	if (!errors.empty())
 	{
@@ -263,6 +259,11 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 
 	dataPlane->waitAllWorkers();
 
+	if (need_balancer_update)
+	{
+	//	chash_balancer.ClearStale();
+	}
+
 	YADECAP_MEMORY_BARRIER_COMPILE;
 	auto te = std::chrono::steady_clock::now();
 	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
@@ -279,9 +280,11 @@ eResult cControlPlane::updateGlobalBaseBalancer(const common::idp::updateGlobalB
 		return eResult::dataplaneIsBroken;
 	}
 	std::uint64_t count{};
+	std::uint64_t rcount{};
 	for (const auto& [type, data] : request)
 	{
 		count += std::get<common::idp::updateGlobalBaseBalancer::update_balancer_unordered_real::request>(data).size();
+		++rcount;
 	}
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
@@ -329,7 +332,13 @@ eResult cControlPlane::updateGlobalBaseBalancer(const common::idp::updateGlobalB
 	auto te = std::chrono::steady_clock::now();
 	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
 
-	YANET_LOG_ERROR("TTR: BalancerUpdate end. %lu in %lums\n", count, d.count());
+	YANET_LOG_ERROR("TTR: Balancer State update end. %lu requests, %lu reals in %lums\n", rcount, count, d.count());
+
+	ts = std::chrono::steady_clock::now();
+	chash_balancer.UpdateLookups();
+	te = std::chrono::steady_clock::now();
+	d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
+	YANET_LOG_ERROR("TTR: Balancer Lookup update end. %lu in %lums\n", count, d.count());
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 

@@ -1643,8 +1643,8 @@ eResult generation::SetChashServices(chash::Balancer& b)
 
 		auto [beg, end] = b.Lookup(sid);
 
-		range.start = &(*beg);
-		range.size = std::distance(beg, end);
+		range.start = beg;
+		range.size = end;
 		if (first)
 		{
 			YANET_LOG_ERROR("TTR: Service %u range is set to %p, %u\n", sid, range.start, range.size);
@@ -1803,13 +1803,12 @@ void generation::CompileWrrServices()
 	ring->size = std::distance(ring->reals, service_start);
 }
 
-eResult generation::UpdateChashServices(chash::Balancer& chup)
+eResult __attribute__ ((noinline)) generation::UpdateChashServices(chash::Balancer& chup)
 {
 	// chash_update = 0s;
 	// chash_make = 0s;
 	// chash_adjust = 0s;
 	// auto ts = std::chrono::steady_clock::now();
-
 	for (uint32_t service_idx = 0;
 	     service_idx < balancer_services_count;
 	     ++service_idx)
