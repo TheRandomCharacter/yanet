@@ -13,8 +13,6 @@
 
 #include <rte_ether.h>
 
-#include <balancer.hpp>
-
 #include "common/idp.h"
 #include "common/result.h"
 
@@ -133,10 +131,6 @@ protected:
 
 	std::mutex mutex;
 	std::mutex balancer_mutex;
-
-	chash::Balancer chash_balancer;
-	eResult BalancerCompileChashServices();
-	eResult BalancerSetChashServices();
 
 	bool use_kernel_interface;
 

@@ -5,6 +5,7 @@
 
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <rte_ethdev.h>
@@ -13,6 +14,7 @@
 #include <rte_mempool.h>
 
 #include <nlohmann/json.hpp>
+#include <chash/service.hpp>
 
 #include "common/idp.h"
 #include "common/result.h"
@@ -134,6 +136,7 @@ public:
 	void run_on_worker_gc(const tSocketId socket_id, const std::function<bool()>& callback);
 
 	void switch_worker_base();
+	void set_worker_base_state_update(bool first_state);
 
 	inline uint32_t get_current_time() const
 	{
@@ -231,6 +234,7 @@ protected:
 
 	std::mutex currentGlobalBaseId_mutex;
 	uint8_t currentGlobalBaseId;
+	bool first_state_update_global_base;
 
 public:
 	std::map<tSocketId, dataplane::globalBase::atomic*> globalBaseAtomics;
@@ -238,8 +242,8 @@ public:
 	void waitAllWorkers();
 	void switchGlobalBase();
 
-	template<typename F>
-	eResult GlobalbasesTransform(F&& func)
+	template<typename F, typename U>
+	eResult GlobalbasesTransform(F&& func, U&& before_switching = []() { return eResult::success; })
 	{
 		for (auto iter : globalBases)
 		{
@@ -250,6 +254,10 @@ public:
 			}
 		}
 
+		if (before_switching() != eResult::success)
+		{
+			return eResult::dataplaneIsBroken;
+		}
 		YADECAP_MEMORY_BARRIER_COMPILE;
 
 		switchGlobalBase();
@@ -265,9 +273,9 @@ public:
 			}
 		}
 
-		YADECAP_MEMORY_BARRIER_COMPILE;
-
 		waitAllWorkers();
+
+		YADECAP_MEMORY_BARRIER_COMPILE;
 
 		return eResult::success;
 	}
@@ -308,6 +316,37 @@ protected:
 	mutable std::mutex dpdk_mutex;
 
 	common::sdp::DataPlaneInSharedMemory sdp_data;
+
+public:
+	struct ChashBalancer
+	{
+		struct Generation
+		{
+			using ChashService = chash::Service<balancer_real_id_t>;
+			std::unordered_map<balancer_service_id_t, ChashService> services;
+			balancer_real_id_t* memory = nullptr;
+		};
+		Generation current;
+		Generation next;
+		void Switch()
+		{
+			current.services = std::move(next.services);
+			std::swap(current.memory, next.memory);
+		}
+		void ClearStale()
+		{
+			next.services.clear();
+			if (next.memory){
+				delete[] next.memory;
+			}
+		}
+	};
+
+private:
+	std::map<tSocketId, ChashBalancer> chash_balancer;
+
+public:
+	eResult UpdateChashWeights();
 
 public: ///< modules
 	cReport report;

@@ -31,182 +31,34 @@ eResult cControlPlane::init(bool use_kernel_interface)
 	return result;
 }
 
-eResult cControlPlane::BalancerCompileChashServices()
-{
-	YANET_LOG_ERROR("TTR: Started BalancerCompileChashServices\n");
-
-	chash_balancer.ClearServices();
-	if (dataPlane->globalBases.empty())
-	{
-		YANET_LOG_INFO("No chash rings since no globalbases\n");
-		return eResult::dataplaneIsBroken;
-	}
-	auto* nextgen = dataPlane->globalBases.begin()->second[dataPlane->currentGlobalBaseId ^ 1];
-
-	auto& services = nextgen->balancer_services;
-	for (auto cur = nextgen->balancer_active_services,
-	          end = cur + nextgen->balancer_services_count;
-	     cur != end;
-	     ++cur)
-	{
-		const balancer_service_id_t id = *cur;
-		const auto& service = nextgen->balancer_services[id];
-		if ((services[id].scheduler != ::balancer::scheduler::chash) &&
-		    (services[id].scheduler != ::balancer::scheduler::wlc))
-		{
-			continue;
-		}
-
-		std::vector<ipv6_address_t> reals;
-		std::vector<uint32_t> weights;
-		reals.reserve(service.real_size);
-		weights.reserve(service.real_size);
-		for (uint32_t real_idx = service.real_start, real_end = real_idx + service.real_size;
-		     real_idx != real_end;
-		     ++real_idx)
-		{
-			balancer_real_id_t real_id = nextgen->balancer_service_reals[real_idx];
-			reals.emplace_back(nextgen->balancer_reals[real_id].destination);
-			weights.push_back(nextgen->balancer_real_states[real_id].weight);
-		}
-
-		if (!chash_balancer.AddService(
-		            id,
-		            &nextgen->balancer_service_reals[service.real_start],
-		            &nextgen->balancer_service_reals[service.real_start] + service.real_size,
-		            reals.begin(),
-		            weights.begin()))
-		{
-			YANET_LOG_ERROR("Failed to intialize updater for balancer service %u.\n", id);
-			return eResult::errorBalancerUpdate;
-		}
-	}
-	YANET_LOG_ERROR("TTR: Finishing BalancerCompileChashServices\n");
-	return eResult::success;
-}
-
-eResult cControlPlane::BalancerSetChashServices()
-{
-	return dataPlane->GlobalbasesTransform([this](dataplane::globalBase::generation* gen) {
-		auto& services = gen->balancer_services;
-		for (auto cur = gen->balancer_active_services,
-		          end = cur + gen->balancer_services_count;
-		     cur != end;
-		     ++cur)
-		{
-			const balancer_service_id_t id = *cur;
-			if ((services[id].scheduler != ::balancer::scheduler::chash) &&
-			    (services[id].scheduler != ::balancer::scheduler::wlc))
-			{
-				continue;
-			}
-
-			auto [b, e] = chash_balancer.Lookup(id);
-			auto& range = gen->balancer_service_ring.ranges[id];
-			range.start = b;
-			range.size = e;
-		}
-		return eResult::success;
-	});
-}
-
 common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const common::idp::updateGlobalBase::request& request)
 {
-	YANET_LOG_ERROR("TTR: updateGlobalBase start.\n");
 	std::lock_guard<std::mutex> guard(mutex);
 	if (!errors.empty())
 	{
 		return eResult::dataplaneIsBroken;
 	}
 
-	auto ts = std::chrono::steady_clock::now();
-
-	std::lock_guard<std::mutex> balancer_guard(balancer_mutex);
-
 	YADECAP_MEMORY_BARRIER_COMPILE;
-	const dataplane::globalBase::generation* reference{nullptr};
+
 	auto result = eResult::success;
-	auto update = [&](const common::idp::updateGlobalBase::request::value_type& iter,
-	                  dataplane::globalBase::generation* generation) {
-		auto r = eResult::success;
-		if (const auto& type = std::get<0>(iter); type == common::idp::updateGlobalBase::requestType::update_balancer_services)
-		{
-			const auto& request =
-			        std::get<common::idp::updateGlobalBase::update_balancer_services::request>(std::get<1>(iter));
-			auto res = generation->update_balancer_services(request);
-			if (res != eResult::success)
-			{
-				return res;
-			}
-
-			if (reference)
-			{
-				generation->BalancerCopyWrrRingFrom(reference);
-			}
-			else
-			{
-				generation->CompileWrrServices();
-				reference = generation;
-			}
-		}
-		else
-		{
-			r = generation->update(iter);
-		}
-		if (r != eResult::success)
-		{
-			++errors["updateGlobalBase"];
-		}
-		return r;
-	};
-
+	dataPlane->set_worker_base_state_update(true);
 	for (auto& iter : dataPlane->globalBases)
 	{
 		auto* globalBaseNext = iter.second[dataPlane->currentGlobalBaseId ^ 1];
 		DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::global_base_pre_update);
-		for (const auto& one : request)
-		{
-			if (update(one, globalBaseNext) != eResult::success)
-			{
-				break;
-			}
-		}
-		YADECAP_LOG_DEBUG("done update %i\n", result != eResult::success ? 0 : 1);
+		result = globalBaseNext->update(request);
 		DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::global_base_post_update);
+		if (result != eResult::success)
+		{
+			++errors["updateGlobalBase"];
+			break;
+		}
 	}
 
 	if (result != eResult::success)
 	{
 		return result;
-	}
-
-	bool need_balancer_update = false;
-	for (const auto& one : request)
-	{
-		if (const auto& type = std::get<0>(one); type == common::idp::updateGlobalBase::requestType::update_balancer_services)
-		{
-			need_balancer_update = true;
-		}
-	}
-
-	if (need_balancer_update)
-	{
-		auto res = BalancerCompileChashServices();
-		if (res != eResult::success)
-		{
-			++errors["updateGlobalBase"];
-			return eResult::dataplaneIsBroken;
-		}
-
-		for (auto& iter : dataPlane->globalBases)
-		{
-			auto* globalBaseNext = iter.second[dataPlane->currentGlobalBaseId ^ 1];
-			if (auto res = globalBaseNext->SetChashServices(chash_balancer); res != eResult::success)
-			{
-				++errors["updateGlobalBase"];
-				return res;
-			}
-		}
 	}
 
 	DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::global_base_switch);
@@ -217,17 +69,13 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
+	result = eResult::success;
+	dataPlane->set_worker_base_state_update(false);
 	for (auto& iter : dataPlane->globalBases)
 	{
 		auto* globalBaseNext = iter.second[dataPlane->currentGlobalBaseId ^ 1];
 		DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::global_base_pre_update);
-		for (const auto& one : request)
-		{
-			if (update(one, globalBaseNext) != eResult::success)
-			{
-				break;
-			}
-		}
+		result = globalBaseNext->update(request);
 		DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::global_base_post_update);
 		if (result != eResult::success)
 		{
@@ -242,33 +90,11 @@ common::idp::updateGlobalBase::response cControlPlane::updateGlobalBase(const co
 		return result;
 	}
 
-	if (need_balancer_update)
-	{
-		for (auto& iter : dataPlane->globalBases)
-		{
-			auto* globalBaseNext = iter.second[dataPlane->currentGlobalBaseId ^ 1];
-			if (auto res = globalBaseNext->SetChashServices(chash_balancer); res != eResult::success)
-			{
-				++errors["updateGlobalBase"];
-				return res;
-			}
-		}
-	}
-
 	YADECAP_MEMORY_BARRIER_COMPILE;
 
 	dataPlane->waitAllWorkers();
 
-	if (need_balancer_update)
-	{
-	//	chash_balancer.ClearStale();
-	}
-
 	YADECAP_MEMORY_BARRIER_COMPILE;
-	auto te = std::chrono::steady_clock::now();
-	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
-
-	YANET_LOG_ERROR("TTR: updateGlobalBase end. %lums\n", d.count());
 
 	return eResult::success;
 }
@@ -279,92 +105,20 @@ eResult cControlPlane::updateGlobalBaseBalancer(const common::idp::updateGlobalB
 	{
 		return eResult::dataplaneIsBroken;
 	}
-	std::uint64_t count{};
-	std::uint64_t rcount{};
-	for (const auto& [type, data] : request)
-	{
-		count += std::get<common::idp::updateGlobalBaseBalancer::update_balancer_unordered_real::request>(data).size();
-		++rcount;
-	}
 
 	YADECAP_MEMORY_BARRIER_COMPILE;
 	DEBUG_LATCH_WAIT(common::idp::debug_latch_update::id::balancer_update);
 	std::lock_guard<std::mutex> guard(balancer_mutex);
-	auto result = eResult::success;
 
-	std::unordered_map<uint32_t, chash::Patch> patches;
-
-	auto update = [&](const common::idp::updateGlobalBaseBalancer::request& request,
-	                  dataplane::globalBase::generation* generation) {
-		result = generation->updateBalancer(request);
-		if (result != eResult::success)
-		{
-			++errors["updateGlobalBase"];
-		}
-
-		generation->CompileWrrServices();
-
-		return result;
-	};
-
-	for (auto& iter : dataPlane->globalBases)
-	{
-		auto* globalBaseNext = iter.second[dataPlane->currentGlobalBaseId ^ 1];
-		if (update(request, globalBaseNext) != eResult::success)
-		{
-			break;
-		}
-	}
+	auto result = dataPlane->GlobalbasesTransform(
+	        [&](auto* base) { return base->updateBalancer(request); },
+	        [this]() { return dataPlane->UpdateChashWeights(); });
 
 	if (result != eResult::success)
 	{
+		++errors["updateGlobalBase"];
 		return result;
 	}
-
-	if (dataPlane->globalBases.empty())
-	{
-		YANET_LOG_INFO("No chash rings since no globalbases\n");
-		return {};
-	}
-	auto* nextgen = dataPlane->globalBases.begin()->second[dataPlane->currentGlobalBaseId ^ 1];
-	auto ts = std::chrono::steady_clock::now();
-	nextgen->UpdateChashServices(chash_balancer);
-	auto te = std::chrono::steady_clock::now();
-	auto d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
-
-	YANET_LOG_ERROR("TTR: Balancer State update end. %lu requests, %lu reals in %lums\n", rcount, count, d.count());
-
-	ts = std::chrono::steady_clock::now();
-	chash_balancer.UpdateLookups();
-	te = std::chrono::steady_clock::now();
-	d = std::chrono::duration_cast<std::chrono::milliseconds>(te - ts);
-	YANET_LOG_ERROR("TTR: Balancer Lookup update end. %lu in %lums\n", count, d.count());
-
-	YADECAP_MEMORY_BARRIER_COMPILE;
-
-	dataPlane->switchGlobalBase();
-
-	YADECAP_MEMORY_BARRIER_COMPILE;
-	for (auto& iter : dataPlane->globalBases)
-	{
-		auto* globalBaseNext = iter.second[dataPlane->currentGlobalBaseId ^ 1];
-		if (update(request, globalBaseNext) != eResult::success)
-		{
-			// Practically unreachable.
-			break;
-		}
-	}
-
-	if (result != eResult::success)
-	{
-		return result;
-	}
-
-	YADECAP_MEMORY_BARRIER_COMPILE;
-
-	dataPlane->waitAllWorkers();
-
-	YADECAP_MEMORY_BARRIER_COMPILE;
 
 	return eResult::success;
 }

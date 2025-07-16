@@ -1978,6 +1978,11 @@ void cDataPlane::switchGlobalBase()
 	YADECAP_MEMORY_BARRIER_COMPILE;
 }
 
+void cDataPlane::set_worker_base_state_update(bool first_state)
+{
+	first_state_update_global_base = first_state;
+}
+
 eResult cDataPlane::parseConfig(const std::string& configFilePath)
 {
 	eResult result = eResult::success;
@@ -2497,4 +2502,28 @@ eResult cDataPlane::initEal(const std::string& binaryPath,
 	return eResult::success;
 
 #undef insert_eal_arg
+}
+
+eResult cDataPlane::UpdateChashWeights()
+{
+	for (auto& [socket, bases] : globalBases)
+	{
+		auto next = bases[currentGlobalBaseId ^ 1];
+		for (auto& [id, service] : chash_balancer.at(socket).current.services)
+		{
+			std::vector<balancer_real_id_t> weights;
+			auto& svc = next->balancer_services[id];
+			weights.reserve(svc.real_size);
+			balancer_real_id_t* ids_begin = next->balancer_service_reals + svc.real_start;
+			balancer_real_id_t* ids_end = next->balancer_service_reals + svc.real_start + svc.real_size;
+			for (auto it = ids_begin; it != ids_end; ++it)
+			{
+				weights.push_back(next->balancer_real_states[*it].weight);
+			}
+			service.Update(ids_begin,
+			               ids_end,
+			               weights.begin());
+		}
+	}
+	return eResult::success;
 }

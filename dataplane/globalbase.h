@@ -1,13 +1,15 @@
 #pragma once
 
 #include <memory>
+#include <tuple>
+#include <vector>
 
 #include <rte_byteorder.h>
 #include <rte_common.h>
 #include <rte_ether.h>
 #include <rte_ip.h>
 
-#include <balancer.hpp>
+#include <chash/service.hpp>
 
 #include "common/idp.h"
 #include "common/result.h"
@@ -147,7 +149,7 @@ public:
 
 public:
 	eResult init();
-	eResult update(const common::idp::updateGlobalBase::request::value_type& request);
+	eResult update(const common::idp::updateGlobalBase::request& request);
 	eResult updateBalancer(const common::idp::updateGlobalBaseBalancer::request& request);
 	eResult get(const common::idp::getGlobalBase::request& request, common::idp::getGlobalBase::globalBase& globalBaseResponse) const;
 
@@ -200,22 +202,20 @@ protected:
 	eResult tscs_base_value_update(const common::idp::updateGlobalBase::tscs_base_value_update::request& request);
 	eResult update_host_config(const common::idp::updateGlobalBase::update_host_config::request& request);
 
-	enum class ServiceRingOp
-	{
-		Update,
-		Relocate,
-		Rebuild
-	};
-
 	using RealWeight = std::pair<balancer_real_id_t, decltype(balancer_real_state_t::weight)>;
 
 	std::vector<std::uint32_t> BalancerServiceWeights(const balancer_service_t& service);
 
 public:
-	void BalancerCopyWrrRingFrom(const generation* other);
-	void CompileWrrServices();
-	eResult SetChashServices(chash::Balancer& b);
-	eResult UpdateChashServices(chash::Balancer& b);
+	using ChashService = chash::Service<balancer_real_id_t>;
+	std::size_t ChashMemorySize(const std::vector<balancer_service_id_t>& ids);
+	std::pair<std::vector<balancer_service_id_t>,
+	          std::vector<balancer_service_id_t>>
+	GetBalancerActiveServicesByType();
+	eResult RebuildBalancerServiceRings();
+	eResult RebuildBalancerChashServiceRings(const std::vector<balancer_service_id_t>& ids);
+	eResult RebuildBalancerWrrServiceRings(const std::vector<balancer_service_id_t>& ids);
+	void SetBalancerChashServiceRanges(std::unordered_map<balancer_service_id_t, ChashService>& services);
 
 protected:
 	struct ServiceSize
@@ -364,6 +364,9 @@ public: ///< @todo
 
 	balancer_real_state_t balancer_real_states[YANET_CONFIG_BALANCER_REALS_SIZE];
 	balancer_service_ring_t balancer_service_ring;
+
+	std::shared_ptr<std::unordered_map<balancer_service_id_t, ChashService>> chash_balancer_services;
+	std::unordered_map<balancer_service_id_t, balancer_real_id_t*> chash_balancer_rings;
 
 	int64_t dump_id_to_tag[YANET_CONFIG_DUMP_ID_TO_TAG_SIZE];
 
