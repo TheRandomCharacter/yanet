@@ -1640,9 +1640,14 @@ std::pair<std::vector<balancer_service_id_t>,
           std::vector<balancer_service_id_t>>
 generation::GetBalancerActiveServicesByType()
 {
-	std::vector<balancer_service_id_t> chash, wrr;
-	for (const auto id : balancer_active_services)
+	std::pair<std::vector<balancer_service_id_t>,
+	          std::vector<balancer_service_id_t>>
+	        res;
+	auto& [chash, wrr] = res;
+
+	for (std::uint32_t idx = 0; idx < balancer_services_count; ++idx)
 	{
+		const auto id = balancer_active_services[idx];
 		const auto& service = balancer_services[id];
 		if (service.scheduler == ::balancer::scheduler::chash ||
 		    service.scheduler == ::balancer::scheduler::wlc)
@@ -1659,7 +1664,7 @@ generation::GetBalancerActiveServicesByType()
 			YANET_LOG_ERROR("invalid scheduler: '%s'\n", ::balancer::to_string(service.scheduler));
 		}
 	}
-	return {chash, wrr};
+	return res;
 }
 
 eResult generation::RebuildBalancerServiceRings()
@@ -1670,6 +1675,7 @@ eResult generation::RebuildBalancerServiceRings()
 		eResult res = RebuildBalancerChashServiceRings(chash);
 		if (res != eResult::success)
 		{
+			YANET_LOG_ERROR("failed to rebuild chash service rings\n");
 			return res;
 		}
 	}
@@ -1718,7 +1724,7 @@ void generation::SetBalancerChashServiceRanges(std::unordered_map<balancer_servi
 eResult generation::RebuildBalancerChashServiceRings(const std::vector<balancer_service_id_t>& ids)
 {
 	std::size_t memsize = ChashMemorySize(ids);
-	auto& [next, mem] = dataPlane->chash_balancer.at(socketId).next;
+	auto& [next, mem] = dataPlane->chash_balancer[socketId].next;
 	if (mem)
 	{
 		delete[] mem;

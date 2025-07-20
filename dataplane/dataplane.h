@@ -338,6 +338,7 @@ public:
 			next.services.clear();
 			if (next.memory){
 				delete[] next.memory;
+				next.memory = nullptr;
 			}
 		}
 	};
